@@ -372,6 +372,165 @@ function applyBrackets(netIncome, params) {
   return { tax: Math.max(0, Math.round(netIncome * last.rate - last.deduct)), rate: last.rate, deduct: last.deduct };
 }
 
+// ============================================================
+// 5 種計稅方式試算 (所得稅法第15條)
+// ============================================================
+function computeAllTaxMethods(ctx) {
+  const { filers, taxpayerId, spouseId, memberIncome, householdProperties, rentalRecords, params, year } = ctx;
+  const { exemptionByMember, generalDeduction, disabilityDed, educationDed, preschoolDed, longTermCareDed, rentDeductActual, blDiff, savings } = ctx;
+  const { dividendCredit, dividendSeparateTax, totalCreditsBeforePrepaid, prepaidTax } = ctx;
+
+  // 算個人所得明細
+  const incomeByMember = {};
+  filers.forEach(m => {
+    const inc = memberIncome[m.id] || {};
+    const myProps = householdProperties.filter(p => p.ownerId === m.id);
+    const myComputable = myProps
+      .map(p => {
+        const rec = getRentalRecord(rentalRecords, p, year);
+        return rec.includeInFiling && !rec.isVirtual ? recordToComputable(rec, p) : null;
+      })
+      .filter(Boolean);
+    const r = computeRentalIncome(myComputable, params);
+    incomeByMember[m.id] = {
+      salary: toNum(inc.salary),
+      salaryDed: Math.min(toNum(inc.salary), params.salaryDeduction),
+      interest: toNum(inc.interest),
+      dividend: toNum(inc.dividend),
+      rental: r.taxable,
+      other: toNum(inc.other),
+    };
+  });
+
+  const memberSpecial = (memberId) => {
+    const m = filers.find(f => f.id === memberId);
+    if (!m) return 0;
+    let sd = 0;
+    if (m.isDisabled) sd += params.disabilityDeduction;
+    if (m.needsLongTermCare) sd += params.longTermCare;
+    return sd;
+  };
+  const memberExemption = (memberId) => {
+    const e = exemptionByMember.find(x => x.memberId === memberId);
+    return e ? e.amount : params.exemption;
+  };
+
+  const totals = filers.reduce((t, m) => {
+    const inc = incomeByMember[m.id];
+    t.salary += inc.salary;
+    t.salaryDed += inc.salaryDed;
+    t.interest += inc.interest;
+    t.dividend += inc.dividend;
+    t.rental += inc.rental;
+    t.other += inc.other;
+    return t;
+  }, { salary: 0, salaryDed: 0, interest: 0, dividend: 0, rental: 0, other: 0 });
+  const grossAll = totals.salary + totals.interest + totals.dividend + totals.rental + totals.other;
+  const allMemberExemption = exemptionByMember.reduce((s, e) => s + e.amount, 0);
+
+  const finalize = (taxRaw) => {
+    const taxAfterCredits = Math.max(0, taxRaw + dividendSeparateTax - totalCreditsBeforePrepaid);
+    const finalDue = taxAfterCredits - prepaidTax;
+    return { taxRaw, taxAfterCredits, finalDue };
+  };
+
+  const methods = [];
+
+  // === 方法 1: 全部所得合併計稅 ===
+  {
+    const net = Math.max(0, grossAll - allMemberExemption - generalDeduction
+      - totals.salaryDed - savings - disabilityDed - educationDed - preschoolDed - longTermCareDed - rentDeductActual - blDiff);
+    const r = applyBrackets(net, params);
+    const f = finalize(r.tax);
+    methods.push({
+      key: "combined",
+      label: "全部所得合併計稅",
+      desc: "(預設方法)",
+      sub: [{ label: "全戶淨額", net, taxRate: r.rate, deductValue: r.deduct, tax: r.tax }],
+      taxRaw: r.tax,
+      ...f,
+    });
+  }
+
+  // === 方法 2 & 3: 薪資分開計稅 ===
+  const hasSpouseWithSalary = spouseId && incomeByMember[spouseId] && incomeByMember[spouseId].salary > 0;
+  const hasTaxpayerWithSalary = incomeByMember[taxpayerId] && incomeByMember[taxpayerId].salary > 0;
+
+  const computeSalarySep = (mainId, label) => {
+    const main = incomeByMember[mainId];
+    const mainExemption = memberExemption(mainId);
+    const mainSpecial = memberSpecial(mainId);
+    const mainNet = Math.max(0, main.salary - mainExemption - main.salaryDed - mainSpecial);
+    const r1 = applyBrackets(mainNet, params);
+    const remainGross = grossAll - main.salary;
+    const remainExemption = allMemberExemption - mainExemption;
+    const remainSalaryDed = totals.salaryDed - main.salaryDed;
+    const remainSpecial = (disabilityDed + longTermCareDed) - mainSpecial;
+    const remainNet = Math.max(0, remainGross - remainExemption - generalDeduction
+      - remainSalaryDed - savings - remainSpecial - educationDed - preschoolDed - rentDeductActual - blDiff);
+    const r2 = applyBrackets(remainNet, params);
+    const taxRaw = r1.tax + r2.tax;
+    const f = finalize(taxRaw);
+    return {
+      key: mainId === taxpayerId ? "salarySepTaxpayer" : "salarySepSpouse",
+      label,
+      desc: "薪資分開,其餘合併",
+      sub: [
+        { label: "主之薪資淨額", net: mainNet, taxRate: r1.rate, deductValue: r1.deduct, tax: r1.tax },
+        { label: "其餘所得淨額", net: remainNet, taxRate: r2.rate, deductValue: r2.deduct, tax: r2.tax },
+      ],
+      taxRaw,
+      ...f,
+    };
+  };
+
+  if (spouseId && hasTaxpayerWithSalary) {
+    methods.push(computeSalarySep(taxpayerId, "薪資分開 (本人為主)"));
+  }
+  if (spouseId && hasSpouseWithSalary) {
+    methods.push(computeSalarySep(spouseId, "薪資分開 (配偶為主)"));
+  }
+
+  // === 方法 4 & 5: 各類所得分開計稅 ===
+  const computeAllSep = (mainId, label) => {
+    const main = incomeByMember[mainId];
+    const mainExemption = memberExemption(mainId);
+    const mainSpecial = memberSpecial(mainId);
+    const mainGross = main.salary + main.interest + main.dividend + main.rental + main.other;
+    const mainSavings = Math.min(main.interest, params.savingsDeduction);
+    const mainNet = Math.max(0, mainGross - mainExemption - main.salaryDed - mainSavings - mainSpecial);
+    const r1 = applyBrackets(mainNet, params);
+    const remainGross = grossAll - mainGross;
+    const remainExemption = allMemberExemption - mainExemption;
+    const remainSalaryDed = totals.salaryDed - main.salaryDed;
+    const remainSpecial = (disabilityDed + longTermCareDed) - mainSpecial;
+    const remainSavings = Math.max(0, savings - mainSavings);
+    const remainNet = Math.max(0, remainGross - remainExemption - generalDeduction
+      - remainSalaryDed - remainSavings - remainSpecial - educationDed - preschoolDed - rentDeductActual - blDiff);
+    const r2 = applyBrackets(remainNet, params);
+    const taxRaw = r1.tax + r2.tax;
+    const f = finalize(taxRaw);
+    return {
+      key: mainId === taxpayerId ? "allSepTaxpayer" : "allSepSpouse",
+      label,
+      desc: "主之各類所得分開,其餘合併",
+      sub: [
+        { label: "主之各類淨額", net: mainNet, taxRate: r1.rate, deductValue: r1.deduct, tax: r1.tax },
+        { label: "其餘所得淨額", net: remainNet, taxRate: r2.rate, deductValue: r2.deduct, tax: r2.tax },
+      ],
+      taxRaw,
+      ...f,
+    };
+  };
+
+  if (spouseId) {
+    methods.push(computeAllSep(taxpayerId, "各類所得分開 (本人為主)"));
+    methods.push(computeAllSep(spouseId, "各類所得分開 (配偶為主)"));
+  }
+
+  return methods;
+}
+
 function computeTaxForFiling(filing, members, year) {
   const params = TAX_PARAMS[year];
   if (!params) return null;
@@ -558,6 +717,49 @@ function computeTaxForFiling(filing, members, year) {
   const taxAfterCredits = Math.max(0, taxResult.tax + dividendSeparateTax - totalCreditsBeforePrepaid);
   const finalDue = taxAfterCredits - prepaidTax; // 正數 = 應補繳;負數 = 可退稅
 
+  // === 7.8 5 種計稅方式試算 (所得稅法第15條夫妻計稅選擇) ===
+  // 僅在「夫妻合併申報」且雙方都有所得時才有意義
+  const methods = computeAllTaxMethods({
+    filers,
+    taxpayerId: filing.taxpayerId,
+    spouseId: filing.spouseId,
+    memberIncome: filing.memberIncome || {},
+    householdProperties: (filing.properties || []),
+    rentalRecords: filing.rentalRecords || [],
+    params,
+    year,
+    // 把上面算好的扣除額/抵減傳進去,因為這些不受計稅方式影響
+    exemption,
+    exemptionByMember: filers.map(m => {
+      let role = "dependent";
+      if (m.id === filing.taxpayerId) role = "taxpayer";
+      else if (m.id === filing.spouseId) role = "spouse";
+      return { memberId: m.id, amount: canUseElderExemption(m, role) ? params.exemptionElder : params.exemption, role };
+    }),
+    generalDeduction: generalDeductionActual,
+    disabilityDed,
+    educationDed,
+    preschoolDed,
+    longTermCareDed,
+    rentDeductActual,
+    blDiff,
+    savings,
+    dividendCredit,
+    dividendSeparateTax,
+    totalCreditsBeforePrepaid,
+    prepaidTax,
+  });
+
+  // 選稅最低的
+  const bestMethod = methods.reduce((best, m) =>
+    (!best || m.finalDue < best.finalDue) ? m : best, null);
+
+  // 預設使用最佳方法的結果作為主要顯示
+  const useMethod = filing.taxMethod || "auto"; // auto / combined / salarySepTaxpayer / ...
+  const chosenMethod = useMethod === "auto"
+    ? bestMethod
+    : methods.find(m => m.key === useMethod) || bestMethod;
+
   // === 8. 標準 vs 列舉比較 (給使用者參考) ===
   const altDeduction = useItemized ? standardDeduction : itemizedTotalActual;
   const altGeneral = altDeduction;
@@ -598,11 +800,11 @@ function computeTaxForFiling(filing, members, year) {
     specialTotal,
     // 基本生活費
     blTotal, blcompare, blDiff,
-    // 稅
+    // 稅 — 採用 chosenMethod 的結果作為最終值
     netIncome,
-    taxRate: taxResult.rate,
+    taxRate: chosenMethod && chosenMethod.sub.length === 1 ? chosenMethod.sub[0].taxRate : taxResult.rate,
     taxDeductValue: taxResult.deduct,
-    tax: taxResult.tax,
+    tax: chosenMethod ? chosenMethod.taxRaw : taxResult.tax,
     // 抵減
     dividendChoice,
     dividendCredit,
@@ -610,9 +812,14 @@ function computeTaxForFiling(filing, members, year) {
     repurchaseCredit,
     otherCredit,
     totalCreditsBeforePrepaid,
-    taxAfterCredits,
+    taxAfterCredits: chosenMethod ? chosenMethod.taxAfterCredits : taxAfterCredits,
     prepaidTax,
-    finalDue, // 正數 = 補繳;負數 = 退稅
+    finalDue: chosenMethod ? chosenMethod.finalDue : finalDue, // 正數 = 補繳;負數 = 退稅
+    // 5 種計稅方式比較
+    taxMethods: methods,
+    bestMethod,
+    chosenMethod,
+    taxMethodUsed: useMethod,
     // 比較
     altDeduction: useItemized ? "standard" : "itemized",
     altTax,
@@ -1418,6 +1625,7 @@ function FilingPage({ data, setData, year, setPage }) {
       savingsOverride: false,
       savingsOverrideAmount: 0,
       dividendChoice: "combine", // combine (8.5%抵減) / separate (28%分開)
+      taxMethod: "auto", // auto / combined / salarySepTaxpayer / salarySepSpouse / allSepTaxpayer / allSepSpouse
       taxCredits: {
         prepaidTax: 0,
         repurchaseCredit: 0,
@@ -2041,6 +2249,11 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
         </div>
       </div>
 
+      {/* ④ 5 種計稅方式比較 (只在夫妻合併申報時顯示) */}
+      {result.hasSpouse && result.taxMethods && result.taxMethods.length > 1 && (
+        <TaxMethodsPanel result={result} filing={filing} onChange={onChange} />
+      )}
+
       {/* 試算結果 */}
       <ResultPanel result={result} year={year} />
 
@@ -2048,7 +2261,7 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
       {householdProperties.length > 0 && (
         <div className="card">
           <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
-            <div className="ornament">⑤ RENTAL RECORDS · 本戶 {year} 年度租賃紀錄</div>
+            <div className="ornament">⑥ RENTAL RECORDS · 本戶 {year} 年度租賃紀錄</div>
             <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
               每年獨立記錄,勾選「計入申報」才會列入綜所所得
             </div>
@@ -2177,12 +2390,97 @@ function DeductionInput({ label, hint, value, onChange }) {
   );
 }
 
+function TaxMethodsPanel({ result, filing, onChange }) {
+  const methods = result.taxMethods;
+  const best = result.bestMethod;
+  const chosen = result.chosenMethod;
+  const isAuto = (filing.taxMethod || "auto") === "auto";
+
+  return (
+    <div className="card" style={{ borderColor: "var(--green)" }}>
+      <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)", background: "var(--green-soft)" }}>
+        <div className="ornament" style={{ color: "#3d5235" }}>④ TAX METHODS · 5 種計稅方式比較 (所得稅法第15條)</div>
+        <div className="text-xs" style={{ color: "#3d5235" }}>
+          ✓ 系統已自動採用稅最低的方式 (省下 {fmt(methods[0].finalDue - best.finalDue)} 元)
+        </div>
+      </div>
+      <div className="p-5">
+        <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+          夫妻合併申報時可選 5 種計稅方式,系統自動試算所有方式並推薦最低稅額者。
+          也可手動指定下方某種方式。
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+              <th className="text-center px-2 py-2 text-xs font-medium w-12" style={{ color: "var(--ink-mute)" }}>採用</th>
+              <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>計稅方式</th>
+              <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>淨額分配 (主/其餘)</th>
+              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>綜所稅額</th>
+              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>抵減後</th>
+              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應補/退</th>
+              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>vs 最低</th>
+            </tr>
+          </thead>
+          <tbody>
+            {methods.map(m => {
+              const isBest = m.key === best.key;
+              const isChosen = m.key === chosen.key;
+              const diff = m.finalDue - best.finalDue;
+              return (
+                <tr key={m.key} className="table-row" style={{ background: isChosen ? "var(--accent-soft)" : (isBest ? "#f5fbef" : "white") }}>
+                  <td className="px-2 py-2 text-center">
+                    <input type="radio" name="taxMethod"
+                      checked={isChosen}
+                      onChange={() => onChange({ ...filing, taxMethod: m.key })} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-xs">{m.label}</div>
+                    <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{m.desc}</div>
+                    {isBest && <span className="chip chip-green text-[10px] mt-0.5">★ 最低稅</span>}
+                  </td>
+                  <td className="px-3 py-2 text-xs num">
+                    {m.sub.map((s, i) => (
+                      <div key={i}>
+                        {fmt(s.net)} <span style={{ color: "var(--ink-mute)" }}>×{(s.taxRate * 100).toFixed(0)}%</span>
+                      </div>
+                    ))}
+                  </td>
+                  <td className="px-3 py-2 text-right num text-xs">{fmt(m.taxRaw)}</td>
+                  <td className="px-3 py-2 text-right num text-xs">{fmt(m.taxAfterCredits)}</td>
+                  <td className="px-3 py-2 text-right num text-xs font-medium" style={{ color: m.finalDue > 0 ? "var(--accent-deep)" : "var(--green)" }}>
+                    {m.finalDue >= 0 ? fmt(m.finalDue) : `退 ${fmt(-m.finalDue)}`}
+                  </td>
+                  <td className="px-3 py-2 text-right num text-xs" style={{ color: diff === 0 ? "var(--green)" : "var(--ink-mute)" }}>
+                    {diff === 0 ? "—" : `+${fmt(diff)}`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        <div className="mt-3 flex items-center gap-3">
+          <label className="text-xs flex items-center gap-2 cursor-pointer">
+            <input type="checkbox"
+              checked={isAuto}
+              onChange={e => onChange({ ...filing, taxMethod: e.target.checked ? "auto" : best.key })} />
+            自動選稅最低 (建議)
+          </label>
+          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>
+            {isAuto ? `→ 目前自動採用「${best.label}」` : `→ 手動選擇「${chosen.label}」(比最低多繳 ${fmt(chosen.finalDue - best.finalDue)})`}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ResultPanel({ result, year }) {
   if (!result) return null;
   return (
     <div className="card" style={{ background: "#fdfcf7", borderColor: "var(--accent)" }}>
       <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)", color: "var(--accent-deep)" }}>
-        ④ RESULT · 稅額試算結果
+        ⑤ RESULT · 稅額試算結果
       </div>
       <div className="p-5">
         <div className="grid grid-cols-2 gap-6">
