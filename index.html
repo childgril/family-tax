@@ -460,14 +460,17 @@ function computeAllTaxMethods(ctx) {
     const main = incomeByMember[mainId];
     const mainExemption = memberExemption(mainId);
     const mainSpecial = memberSpecial(mainId);
+    // 主之薪資淨額 = 薪資 - 免稅 - 薪資扣除 - 身障/長照
     const mainNet = Math.max(0, main.salary - mainExemption - main.salaryDed - mainSpecial);
     const r1 = applyBrackets(mainNet, params);
+
+    // 不含本人塊: 全戶 - 本人薪資 (注意: 本人非薪資所得仍在不含本人塊裡)
     const remainGross = grossAll - main.salary;
     const remainExemption = allMemberExemption - mainExemption;
     const remainSalaryDed = totals.salaryDed - main.salaryDed;
     const remainSpecial = (disabilityDed + longTermCareDed) - mainSpecial;
-    const remainNet = Math.max(0, remainGross - remainExemption - generalDeduction
-      - remainSalaryDed - savings - remainSpecial - educationDed - preschoolDed - rentDeductActual - blDiff);
+    const remainDeductSum = generalDeduction + remainSalaryDed + savings + remainSpecial + educationDed + preschoolDed + rentDeductActual;
+    const remainNet = Math.max(0, remainGross - remainExemption - remainDeductSum - blDiff);
     const r2 = applyBrackets(remainNet, params);
     const taxRaw = r1.tax + r2.tax;
     const f = finalize(taxRaw);
@@ -475,10 +478,38 @@ function computeAllTaxMethods(ctx) {
       key: mainId === taxpayerId ? "salarySepTaxpayer" : "salarySepSpouse",
       label,
       desc: "薪資分開,其餘合併",
+      mainMemberId: mainId,
       sub: [
         { label: "主之薪資淨額", net: mainNet, taxRate: r1.rate, deductValue: r1.deduct, tax: r1.tax },
         { label: "其餘所得淨額", net: remainNet, taxRate: r2.rate, deductValue: r2.deduct, tax: r2.tax },
       ],
+      formula: {
+        type: "salarySep",
+        mainSalary: main.salary,
+        mainSalaryDed: main.salaryDed,
+        mainExemption,
+        mainSpecial,
+        mainNet,
+        mainRate: r1.rate,
+        mainDeductValue: r1.deduct,
+        mainTax: r1.tax,
+        remainGross,
+        remainExemption,
+        remainGeneralDeduction: generalDeduction,
+        remainSalaryDed,
+        remainSavings: savings,
+        remainSpecial,
+        remainEducation: educationDed,
+        remainPreschool: preschoolDed,
+        remainRentDeduct: rentDeductActual,
+        remainDeductTotal: remainDeductSum,
+        blDiff,
+        remainNet,
+        remainRate: r2.rate,
+        remainDeductValue: r2.deduct,
+        remainTax: r2.tax,
+        taxRaw,
+      },
       taxRaw,
       ...f,
     };
@@ -496,28 +527,73 @@ function computeAllTaxMethods(ctx) {
     const main = incomeByMember[mainId];
     const mainExemption = memberExemption(mainId);
     const mainSpecial = memberSpecial(mainId);
-    const mainGross = main.salary + main.interest + main.dividend + main.rental + main.other;
+    // 本人各項所得加總 (還沒扣薪資特扣)
+    const mainGrossRaw = main.salary + main.interest + main.dividend + main.rental + main.other;
+    // 本人各類所得總額 (扣完薪資特扣後) — 對應 Image 1 的「本人各類所得總額」
+    const mainGrossAfterSalary = mainGrossRaw - main.salaryDed;
     const mainSavings = Math.min(main.interest, params.savingsDeduction);
-    const mainNet = Math.max(0, mainGross - mainExemption - main.salaryDed - mainSavings - mainSpecial);
+    // 本人各類所得淨額 = 本人各類所得總額 - 本人免稅 - 本人儲蓄 - 本人身障/長照
+    const mainNet = Math.max(0, mainGrossAfterSalary - mainExemption - mainSavings - mainSpecial);
     const r1 = applyBrackets(mainNet, params);
-    const remainGross = grossAll - mainGross;
+
+    // 不含本人塊
+    const grossAllAfterSalary = grossAll - totals.salaryDed; // 全戶綜所總額 (扣完薪資特扣)
+    const remainGrossAfterSalary = grossAllAfterSalary - mainGrossAfterSalary;
     const remainExemption = allMemberExemption - mainExemption;
-    const remainSalaryDed = totals.salaryDed - main.salaryDed;
-    const remainSpecial = (disabilityDed + longTermCareDed) - mainSpecial;
+    // 不含本人扣除額 = 標準扣除 + 其餘儲蓄 + 其餘身障/長照 + 教育 + 幼兒 + 房租特扣
     const remainSavings = Math.max(0, savings - mainSavings);
-    const remainNet = Math.max(0, remainGross - remainExemption - generalDeduction
-      - remainSalaryDed - remainSavings - remainSpecial - educationDed - preschoolDed - rentDeductActual - blDiff);
+    const remainSpecial = (disabilityDed + longTermCareDed) - mainSpecial;
+    const remainDeductSum = generalDeduction + remainSavings + remainSpecial + educationDed + preschoolDed + rentDeductActual;
+    const remainNet = Math.max(0, remainGrossAfterSalary - remainExemption - remainDeductSum - blDiff);
     const r2 = applyBrackets(remainNet, params);
+
     const taxRaw = r1.tax + r2.tax;
     const f = finalize(taxRaw);
     return {
       key: mainId === taxpayerId ? "allSepTaxpayer" : "allSepSpouse",
       label,
       desc: "主之各類所得分開,其餘合併",
+      mainMemberId: mainId,
       sub: [
         { label: "主之各類淨額", net: mainNet, taxRate: r1.rate, deductValue: r1.deduct, tax: r1.tax },
         { label: "其餘所得淨額", net: remainNet, taxRate: r2.rate, deductValue: r2.deduct, tax: r2.tax },
       ],
+      // 詳細公式 (對應 Image 1)
+      formula: {
+        type: "allSep",
+        // A 區塊 (本人)
+        mainGrossAfterSalary,          // 本人各類所得總額 (扣薪資特扣後)
+        mainSalary: main.salary,
+        mainSalaryDed: main.salaryDed,
+        mainInterest: main.interest,
+        mainDividend: main.dividend,
+        mainRental: main.rental,
+        mainOther: main.other,
+        mainExemption,
+        mainSavings,
+        mainSpecial,
+        mainNet,
+        mainRate: r1.rate,
+        mainDeductValue: r1.deduct,
+        mainTax: r1.tax,
+        // B 區塊 (不含本人)
+        grossAllAfterSalary,           // 綜合所得總額 (扣完薪資特扣)
+        remainExemption,
+        remainGeneralDeduction: generalDeduction,
+        remainSavings,
+        remainSpecial,
+        remainEducation: educationDed,
+        remainPreschool: preschoolDed,
+        remainRentDeduct: rentDeductActual,
+        remainDeductTotal: remainDeductSum,
+        blDiff,
+        remainNet,
+        remainRate: r2.rate,
+        remainDeductValue: r2.deduct,
+        remainTax: r2.tax,
+        // C 合計
+        taxRaw,
+      },
       taxRaw,
       ...f,
     };
@@ -2255,7 +2331,7 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
       )}
 
       {/* 試算結果 */}
-      <ResultPanel result={result} year={year} />
+      <ResultPanel result={result} year={year} members={members} />
 
       {/* 本戶租賃 — 每年獨立紀錄 */}
       {householdProperties.length > 0 && (
@@ -2475,15 +2551,21 @@ function TaxMethodsPanel({ result, filing, onChange }) {
   );
 }
 
-function ResultPanel({ result, year }) {
+function ResultPanel({ result, year, members }) {
   if (!result) return null;
+  const chosen = result.chosenMethod;
+  const isSplit = chosen && chosen.formula && (chosen.formula.type === "allSep" || chosen.formula.type === "salarySep");
+  const mainMember = chosen && chosen.mainMemberId ? (members || result.filers).find(m => m.id === chosen.mainMemberId) : null;
+  const mainName = mainMember ? mainMember.name : "本人";
+
   return (
     <div className="card" style={{ background: "#fdfcf7", borderColor: "var(--accent)" }}>
       <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)", color: "var(--accent-deep)" }}>
-        ⑤ RESULT · 稅額試算結果
+        ⑤ RESULT · 稅額試算結果 · 採用「{chosen ? chosen.label : "全部合併"}」
       </div>
       <div className="p-5">
-        <div className="grid grid-cols-2 gap-6">
+        {/* 上半: 所得明細 (左) + 主數字 (右) */}
+        <div className="grid grid-cols-2 gap-6 mb-6">
           {/* 計算明細 */}
           <div className="space-y-1 text-sm">
             <Row label="薪資所得" v={result.salaryGross} />
@@ -2513,17 +2595,7 @@ function ResultPanel({ result, year }) {
             {result.longTermCareDed > 0 && <Row label="− 長期照顧特扣" v={-result.longTermCareDed} muted />}
             {result.rentDeductActual > 0 && <Row label="− 房租支出特扣" v={-result.rentDeductActual} muted />}
             {result.blDiff > 0 && <Row label="− 基本生活費差額" v={-result.blDiff} muted />}
-            <Row label="綜合所得淨額" v={result.netIncome} bold border />
-            <Row label={`適用稅率 ${(result.taxRate * 100).toFixed(0)}%`} v={Math.round(result.netIncome * result.taxRate)} muted />
-            <Row label="− 累進差額" v={-result.taxDeductValue} muted />
-            <Row label="綜合所得稅額" v={result.tax} bold border />
-            {result.dividendSeparateTax > 0 && <Row label={`+ 股利分開計稅 28%`} v={result.dividendSeparateTax} muted />}
-            {result.dividendCredit > 0 && <Row label="− 股利可抵減稅額 (8.5%)" v={-result.dividendCredit} muted />}
-            {result.repurchaseCredit > 0 && <Row label="− 重購自用住宅退稅" v={-result.repurchaseCredit} muted />}
-            {result.otherCredit > 0 && <Row label="− 其他抵減稅額" v={-result.otherCredit} muted />}
-            {(result.dividendCredit > 0 || result.repurchaseCredit > 0 || result.otherCredit > 0 || result.dividendSeparateTax > 0) &&
-              <Row label="抵減後稅額" v={result.taxAfterCredits} bold border />}
-            {result.prepaidTax > 0 && <Row label="− 已預扣繳稅額" v={-result.prepaidTax} muted />}
+            <Row label="綜合所得淨額 (合併計算用)" v={result.netIncome} bold border />
           </div>
 
           {/* 主數字 */}
@@ -2542,7 +2614,6 @@ function ResultPanel({ result, year }) {
                 </div>
               </div>
 
-              {/* 稅額構成展開 */}
               <div className="p-3 rounded mb-3" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
                 <div className="ornament mb-2">TAX BREAKDOWN · 稅額構成</div>
                 <div className="space-y-1 text-xs">
@@ -2572,13 +2643,18 @@ function ResultPanel({ result, year }) {
                   </div>
                 </div>
                 <div className="p-3 rounded text-center" style={{ background: "white", border: "1px solid var(--line)" }}>
-                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>邊際稅率</div>
-                  <div className="font-serif text-xl num">{(result.taxRate * 100).toFixed(0)}%</div>
+                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                    {isSplit ? "邊際稅率(分開)" : "邊際稅率"}
+                  </div>
+                  <div className="font-serif text-xl num">
+                    {isSplit
+                      ? (chosen.sub.map(s => (s.taxRate * 100).toFixed(0) + "%").join(" / "))
+                      : ((result.taxRate * 100).toFixed(0) + "%")}
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* 標準 vs 列舉節省 */}
             {result.saving > 0 && (
               <div className="mt-4 p-3 rounded" style={{ background: "var(--green-soft)", border: "1px solid var(--green)" }}>
                 <div className="text-xs font-medium" style={{ color: "#3d5235" }}>
@@ -2587,13 +2663,257 @@ function ResultPanel({ result, year }) {
                 <div className="num font-serif text-2xl" style={{ color: "#3d5235" }}>{fmt(result.saving)}</div>
               </div>
             )}
-            {result.saving === 0 && (
-              <div className="mt-4 p-3 rounded text-xs text-center" style={{ background: "#fafaf6", color: "var(--ink-mute)" }}>
-                標準扣除額與列舉扣除額試算結果相同
-              </div>
-            )}
           </div>
         </div>
+
+        {/* 下半: Image 1 風格的橫式公式 */}
+        <div className="border-t pt-5" style={{ borderColor: "var(--line)" }}>
+          <div className="ornament mb-3" style={{ color: "var(--accent-deep)" }}>
+            ★ 稅額計算方式: {chosen ? chosen.label : "全部合併計稅"}
+            {isSplit && chosen.formula.type === "allSep" && " - A.股利及盈餘採合併計稅"}
+          </div>
+
+          {isSplit && chosen.formula.type === "allSep" && (
+            <AllSepFormula formula={chosen.formula} mainName={mainName} result={result} />
+          )}
+          {isSplit && chosen.formula.type === "salarySep" && (
+            <SalarySepFormula formula={chosen.formula} mainName={mainName} result={result} />
+          )}
+          {!isSplit && (
+            <CombinedFormula result={result} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== Image 1 風格的計算公式版面 =====
+
+// 區塊單元: 顯示 "標籤 (數字)" 並可接運算符
+function FCell({ label, value, bold }) {
+  return (
+    <div className="text-center px-2" style={{ minWidth: "85px" }}>
+      <div className="text-[10px] underline" style={{ color: "var(--ink-soft)", lineHeight: "1.2", whiteSpace: "pre-line" }}>{label}</div>
+      <div className={`num mt-1 ${bold ? "font-semibold" : ""}`} style={{ fontSize: "13px" }}>{fmt(value)}</div>
+    </div>
+  );
+}
+function FOp({ op }) {
+  return <div className="self-end pb-0.5 text-base font-semibold mx-1" style={{ color: "var(--ink-soft)" }}>{op}</div>;
+}
+function FormulaRow({ children, className = "" }) {
+  return (
+    <div className={`flex items-end flex-wrap gap-y-2 py-2 ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+// 各類所得分開計稅公式 (對應 Image 1 上半)
+function AllSepFormula({ formula: f, mainName, result }) {
+  return (
+    <div className="space-y-3" style={{ fontSize: "12px" }}>
+      {/* === 區塊 A: 本人 === */}
+      <div className="p-3 rounded" style={{ background: "white", border: "1px solid var(--line)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>
+          ① {mainName} (本人) 各類所得部分
+        </div>
+        <FormulaRow>
+          <FCell label={`${mainName}\n各類所得總額`} value={f.mainGrossAfterSalary} bold />
+          <FOp op="−" />
+          <FCell label={`${mainName}\n免稅額`} value={f.mainExemption} />
+          <FOp op="−" />
+          <FCell label="財產交易\n損失扣除" value={0} />
+          <FOp op="−" />
+          <FCell label={`${mainName}\n儲蓄投資扣除`} value={f.mainSavings} />
+          <FOp op="−" />
+          <FCell label={`${mainName}\n身心障礙特扣`} value={f.mainSpecial} />
+          <FOp op="=" />
+          <FCell label={`${mainName}\n各類所得淨額`} value={f.mainNet} bold />
+        </FormulaRow>
+        <FormulaRow className="mt-1">
+          <FCell label={`${mainName}\n各類所得淨額`} value={f.mainNet} bold />
+          <FOp op="×" />
+          <FCell label="稅率" value={(f.mainRate * 100).toFixed(0) + "%"} />
+          <FOp op="−" />
+          <FCell label="累進差額" value={f.mainDeductValue} />
+          <FOp op="=" />
+          <FCell label={`${mainName}\n應納稅額`} value={f.mainTax} bold />
+        </FormulaRow>
+      </div>
+
+      {/* === 區塊 B: 不含本人 === */}
+      <div className="p-3 rounded" style={{ background: "white", border: "1px solid var(--line)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>
+          ② 不含 {mainName} 部分 (全戶其餘所得)
+        </div>
+        <FormulaRow>
+          <FCell label="綜合所得總額" value={f.grossAllAfterSalary} bold />
+          <FOp op="−" />
+          <FCell label={`${mainName}\n各類所得總額`} value={f.mainGrossAfterSalary} />
+          <FOp op="−" />
+          <FCell label={`免稅額\n(不含${mainName})`} value={f.remainExemption} />
+          <FOp op="−" />
+          <FCell label={`扣除額\n(不含${mainName})`} value={f.remainDeductTotal} />
+          <FOp op="−" />
+          <FCell label="基本生活費\n差額" value={f.blDiff} />
+          <FOp op="=" />
+          <FCell label={`不含${mainName}\n所得淨額`} value={f.remainNet} bold />
+        </FormulaRow>
+        <FormulaRow className="mt-1">
+          <FCell label={`不含${mainName}\n所得淨額`} value={f.remainNet} bold />
+          <FOp op="×" />
+          <FCell label="稅率" value={(f.remainRate * 100).toFixed(0) + "%"} />
+          <FOp op="−" />
+          <FCell label="累進差額" value={f.remainDeductValue} />
+          <FOp op="=" />
+          <FCell label={`不含${mainName}\n應納稅額`} value={f.remainTax} bold />
+        </FormulaRow>
+      </div>
+
+      {/* === 區塊 C: 合計 + 抵減 === */}
+      <div className="p-3 rounded" style={{ background: "var(--accent-soft)", border: "1px solid var(--accent)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>③ 合計 & 抵減</div>
+        <FormulaRow>
+          <FCell label={`${mainName}\n應納稅額`} value={f.mainTax} />
+          <FOp op="+" />
+          <FCell label={`不含${mainName}\n應納稅額`} value={f.remainTax} />
+          <FOp op="=" />
+          <FCell label="應納稅額" value={f.taxRaw} bold />
+        </FormulaRow>
+        <FormulaRow className="mt-1">
+          <FCell label="應納稅額" value={f.taxRaw} />
+          <FOp op="−" />
+          <FCell label="股利可\n抵減稅額" value={result.dividendCredit} />
+          <FOp op="−" />
+          <FCell label="重購自宅\n抵稅額" value={result.repurchaseCredit} />
+          <FOp op="−" />
+          <FCell label="其他抵減" value={result.otherCredit} />
+          <FOp op="−" />
+          <FCell label="全部扣繳\n稅額" value={result.prepaidTax} />
+          <FOp op="=" />
+          <FCell label={result.finalDue >= 0 ? "應自繳稅額" : "應退還稅額"} value={Math.abs(result.finalDue)} bold />
+        </FormulaRow>
+      </div>
+    </div>
+  );
+}
+
+// 薪資分開計稅公式
+function SalarySepFormula({ formula: f, mainName, result }) {
+  return (
+    <div className="space-y-3" style={{ fontSize: "12px" }}>
+      <div className="p-3 rounded" style={{ background: "white", border: "1px solid var(--line)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>
+          ① {mainName} (本人) 薪資部分
+        </div>
+        <FormulaRow>
+          <FCell label={`${mainName}\n薪資收入`} value={f.mainSalary} />
+          <FOp op="−" />
+          <FCell label={`${mainName}\n薪資特扣`} value={f.mainSalaryDed} />
+          <FOp op="−" />
+          <FCell label={`${mainName}\n免稅額`} value={f.mainExemption} />
+          <FOp op="−" />
+          <FCell label={`${mainName}\n身障/長照`} value={f.mainSpecial} />
+          <FOp op="=" />
+          <FCell label={`${mainName}\n薪資淨額`} value={f.mainNet} bold />
+        </FormulaRow>
+        <FormulaRow className="mt-1">
+          <FCell label={`${mainName}\n薪資淨額`} value={f.mainNet} bold />
+          <FOp op="×" />
+          <FCell label="稅率" value={(f.mainRate * 100).toFixed(0) + "%"} />
+          <FOp op="−" />
+          <FCell label="累進差額" value={f.mainDeductValue} />
+          <FOp op="=" />
+          <FCell label={`${mainName}\n應納稅額`} value={f.mainTax} bold />
+        </FormulaRow>
+      </div>
+
+      <div className="p-3 rounded" style={{ background: "white", border: "1px solid var(--line)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>
+          ② 不含 {mainName} 薪資的其餘所得
+        </div>
+        <FormulaRow>
+          <FCell label={`其餘所得\n總額`} value={f.remainGross} bold />
+          <FOp op="−" />
+          <FCell label={`免稅額\n(不含${mainName})`} value={f.remainExemption} />
+          <FOp op="−" />
+          <FCell label={`扣除額\n(不含${mainName})`} value={f.remainDeductTotal} />
+          <FOp op="−" />
+          <FCell label="基本生活費\n差額" value={f.blDiff} />
+          <FOp op="=" />
+          <FCell label={`不含${mainName}\n所得淨額`} value={f.remainNet} bold />
+        </FormulaRow>
+        <FormulaRow className="mt-1">
+          <FCell label={`不含${mainName}\n所得淨額`} value={f.remainNet} bold />
+          <FOp op="×" />
+          <FCell label="稅率" value={(f.remainRate * 100).toFixed(0) + "%"} />
+          <FOp op="−" />
+          <FCell label="累進差額" value={f.remainDeductValue} />
+          <FOp op="=" />
+          <FCell label={`不含${mainName}\n應納稅額`} value={f.remainTax} bold />
+        </FormulaRow>
+      </div>
+
+      <div className="p-3 rounded" style={{ background: "var(--accent-soft)", border: "1px solid var(--accent)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>③ 合計 & 抵減</div>
+        <FormulaRow>
+          <FCell label={`${mainName}\n應納稅額`} value={f.mainTax} />
+          <FOp op="+" />
+          <FCell label={`不含${mainName}\n應納稅額`} value={f.remainTax} />
+          <FOp op="=" />
+          <FCell label="應納稅額" value={f.taxRaw} bold />
+        </FormulaRow>
+        <FormulaRow className="mt-1">
+          <FCell label="應納稅額" value={f.taxRaw} />
+          <FOp op="−" />
+          <FCell label="股利可\n抵減稅額" value={result.dividendCredit} />
+          <FOp op="−" />
+          <FCell label="重購自宅\n抵稅額" value={result.repurchaseCredit} />
+          <FOp op="−" />
+          <FCell label="其他抵減" value={result.otherCredit} />
+          <FOp op="−" />
+          <FCell label="全部扣繳\n稅額" value={result.prepaidTax} />
+          <FOp op="=" />
+          <FCell label={result.finalDue >= 0 ? "應自繳稅額" : "應退還稅額"} value={Math.abs(result.finalDue)} bold />
+        </FormulaRow>
+      </div>
+    </div>
+  );
+}
+
+// 全部合併計稅公式
+function CombinedFormula({ result }) {
+  return (
+    <div className="space-y-3" style={{ fontSize: "12px" }}>
+      <div className="p-3 rounded" style={{ background: "white", border: "1px solid var(--line)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>① 全戶合併計算</div>
+        <FormulaRow>
+          <FCell label="綜合所得淨額" value={result.netIncome} bold />
+          <FOp op="×" />
+          <FCell label="稅率" value={(result.taxRate * 100).toFixed(0) + "%"} />
+          <FOp op="−" />
+          <FCell label="累進差額" value={result.taxDeductValue} />
+          <FOp op="=" />
+          <FCell label="綜合所得\n應納稅額" value={result.tax} bold />
+        </FormulaRow>
+      </div>
+      <div className="p-3 rounded" style={{ background: "var(--accent-soft)", border: "1px solid var(--accent)" }}>
+        <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>② 抵減</div>
+        <FormulaRow>
+          <FCell label="應納稅額" value={result.tax} />
+          <FOp op="−" />
+          <FCell label="股利可\n抵減稅額" value={result.dividendCredit} />
+          <FOp op="−" />
+          <FCell label="重購自宅\n抵稅額" value={result.repurchaseCredit} />
+          <FOp op="−" />
+          <FCell label="其他抵減" value={result.otherCredit} />
+          <FOp op="−" />
+          <FCell label="全部扣繳\n稅額" value={result.prepaidTax} />
+          <FOp op="=" />
+          <FCell label={result.finalDue >= 0 ? "應自繳稅額" : "應退還稅額"} value={Math.abs(result.finalDue)} bold />
+        </FormulaRow>
       </div>
     </div>
   );
