@@ -1,0 +1,2147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>家庭綜所稅試算系統</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f3ee;
+    --bg-card: #ffffff;
+    --bg-sidebar: #1a1d23;
+    --bg-sidebar-hover: #25292f;
+    --bg-sidebar-active: #2d4a5f;
+    --ink: #1a1d23;
+    --ink-soft: #4a4f57;
+    --ink-mute: #8a8f97;
+    --line: #e5e0d5;
+    --line-soft: #ede9e0;
+    --accent: #b8744a;
+    --accent-deep: #8b5530;
+    --accent-soft: #f0d9c5;
+    --green: #5a7a4d;
+    --green-soft: #d8e3cf;
+    --red: #a8493b;
+    --red-soft: #f0d4ce;
+    --gold: #c89938;
+  }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', -apple-system, BlinkMacSystemFont, sans-serif; }
+  .font-serif { font-family: 'Noto Serif TC', serif; }
+  .font-mono { font-family: 'JetBrains Mono', monospace; }
+  .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  .sidebar-item { transition: all 0.18s ease; }
+  .sidebar-item:hover { background: var(--bg-sidebar-hover); }
+  .sidebar-item.active { background: var(--bg-sidebar-active); }
+  .sidebar-item.active::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--accent);
+  }
+  .card { background: var(--bg-card); border: 1px solid var(--line); border-radius: 4px; }
+  .card-bordered { background: var(--bg-card); border: 1px solid var(--line); }
+  .input-text {
+    background: #fafaf6; border: 1px solid var(--line); border-radius: 3px;
+    padding: 0.5rem 0.75rem; font-family: 'JetBrains Mono', monospace;
+    transition: border-color 0.15s;
+  }
+  .input-text:focus { outline: none; border-color: var(--accent); background: white; }
+  .input-text-plain { background: #fafaf6; border: 1px solid var(--line); border-radius: 3px; padding: 0.5rem 0.75rem; }
+  .input-text-plain:focus { outline: none; border-color: var(--accent); background: white; }
+  .btn-primary {
+    background: var(--ink); color: #f5f3ee; padding: 0.55rem 1.1rem; border-radius: 3px;
+    font-weight: 500; transition: all 0.15s; border: 1px solid var(--ink);
+  }
+  .btn-primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+  .btn-secondary {
+    background: transparent; color: var(--ink); padding: 0.5rem 1rem; border-radius: 3px;
+    font-weight: 500; transition: all 0.15s; border: 1px solid var(--line);
+  }
+  .btn-secondary:hover { background: var(--line-soft); border-color: var(--ink-soft); }
+  .btn-danger {
+    background: transparent; color: var(--red); padding: 0.4rem 0.8rem; border-radius: 3px;
+    transition: all 0.15s; border: 1px solid transparent;
+  }
+  .btn-danger:hover { background: var(--red-soft); }
+  .chip {
+    display: inline-flex; align-items: center; padding: 0.2rem 0.55rem;
+    border-radius: 2px; font-size: 0.72rem; font-weight: 500;
+    border: 1px solid var(--line);
+  }
+  .chip-green { background: var(--green-soft); border-color: var(--green); color: #3d5235; }
+  .chip-amber { background: #f5e7c4; border-color: var(--gold); color: #6b5418; }
+  .chip-red { background: var(--red-soft); border-color: var(--red); color: #6b2b22; }
+  .chip-accent { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-deep); }
+  .divider-double { border-top: 3px double var(--line); }
+  .table-row { border-bottom: 1px solid var(--line-soft); }
+  .table-row:hover { background: #fafaf6; }
+  .ornament { letter-spacing: 0.3em; color: var(--ink-mute); font-size: 0.7rem; }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  .chevron { transition: transform 0.2s; }
+  details[open] .chevron { transform: rotate(90deg); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #c9c3b3; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #a8a293; }
+  .grid-paper {
+    background-image:
+      linear-gradient(var(--line-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.25s ease-out; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+// ============================================================
+// 稅務參數資料 (依年度)
+// ============================================================
+const TAX_PARAMS = {
+  114: {
+    label: "114年度 (115年5月申報)",
+    exemption: 97000,           // 一般免稅額
+    exemptionElder: 145500,     // 70歲以上
+    standardSingle: 131000,     // 標準扣除額(單身)
+    standardCouple: 262000,     // 標準扣除額(有配偶)
+    salaryDeduction: 218000,    // 薪資所得特別扣除額
+    disabilityDeduction: 218000,// 身心障礙特別扣除額
+    educationDeduction: 25000,  // 教育學費扣除額(每人)
+    preschoolFirst: 150000,     // 幼兒學前扣除額(第一名,5歲以下)
+    preschoolOther: 225000,     // 幼兒學前扣除額(第二名以上)
+    longTermCare: 120000,       // 長期照顧扣除額
+    savingsDeduction: 270000,   // 儲蓄投資扣除額上限
+    rentDeduction: 180000,      // 房屋租金支出特別扣除額上限
+    basicLivingExp: 213000,     // 基本生活費(每人)
+    insuranceLimit: 24000,      // 人身保險費上限(每人,健保不限)
+    mortgageLimit: 300000,      // 自用住宅購屋借款利息上限
+    rentExpenseRatio: 0.43,     // 租賃所得必要費用率
+    publicLandlordExempt: 15000,// 公益出租人每月免稅額
+    publicLandlordExpense: 0.60,// 公益出租人必要費用率(超出免稅額部分)
+    brackets: [
+      { upTo: 590000, rate: 0.05, deduct: 0 },
+      { upTo: 1330000, rate: 0.12, deduct: 41300 },
+      { upTo: 2660000, rate: 0.20, deduct: 147700 },
+      { upTo: 4980000, rate: 0.30, deduct: 413700 },
+      { upTo: Infinity, rate: 0.40, deduct: 911700 },
+    ],
+  },
+  113: {
+    label: "113年度 (114年5月申報)",
+    exemption: 97000,
+    exemptionElder: 145500,
+    standardSingle: 131000,
+    standardCouple: 262000,
+    salaryDeduction: 218000,
+    disabilityDeduction: 218000,
+    educationDeduction: 25000,
+    preschoolFirst: 150000,
+    preschoolOther: 225000,
+    longTermCare: 120000,
+    savingsDeduction: 270000,
+    rentDeduction: 180000,
+    basicLivingExp: 210000,
+    insuranceLimit: 24000,
+    mortgageLimit: 300000,
+    rentExpenseRatio: 0.43,
+    publicLandlordExempt: 15000,
+    publicLandlordExpense: 0.60,
+    brackets: [
+      { upTo: 590000, rate: 0.05, deduct: 0 },
+      { upTo: 1330000, rate: 0.12, deduct: 41300 },
+      { upTo: 2660000, rate: 0.20, deduct: 147700 },
+      { upTo: 4980000, rate: 0.30, deduct: 413700 },
+      { upTo: Infinity, rate: 0.40, deduct: 911700 },
+    ],
+  },
+  112: {
+    label: "112年度 (113年5月申報)",
+    exemption: 92000,
+    exemptionElder: 138000,
+    standardSingle: 124000,
+    standardCouple: 248000,
+    salaryDeduction: 207000,
+    disabilityDeduction: 207000,
+    educationDeduction: 25000,
+    preschoolFirst: 120000,
+    preschoolOther: 120000,
+    longTermCare: 120000,
+    savingsDeduction: 270000,
+    rentDeduction: 120000, // 112年仍為列舉扣除額
+    basicLivingExp: 202000,
+    insuranceLimit: 24000,
+    mortgageLimit: 300000,
+    rentExpenseRatio: 0.43,
+    publicLandlordExempt: 15000,
+    publicLandlordExpense: 0.60,
+    brackets: [
+      { upTo: 560000, rate: 0.05, deduct: 0 },
+      { upTo: 1260000, rate: 0.12, deduct: 39200 },
+      { upTo: 2520000, rate: 0.20, deduct: 140000 },
+      { upTo: 4720000, rate: 0.30, deduct: 392000 },
+      { upTo: Infinity, rate: 0.40, deduct: 864000 },
+    ],
+  },
+};
+const DEFAULT_YEAR = 114;
+const AVAILABLE_YEARS = [114, 113, 112];
+
+// ============================================================
+// 工具函式
+// ============================================================
+const fmt = (n) => {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return Math.round(Number(n)).toLocaleString("zh-TW");
+};
+const fmtSign = (n) => {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  const v = Math.round(Number(n));
+  if (v > 0) return "+" + v.toLocaleString("zh-TW");
+  return v.toLocaleString("zh-TW");
+};
+const toNum = (v) => {
+  if (v === "" || v === null || v === undefined) return 0;
+  const n = Number(String(v).replace(/,/g, ""));
+  return isNaN(n) ? 0 : n;
+};
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+// ============================================================
+// 核心稅務計算
+// ============================================================
+function computeRentalIncome(properties, params) {
+  // 回傳: { taxable: 應稅租金所得, exempted: 免稅金額, breakdown: [...] }
+  let taxable = 0, exempted = 0;
+  const breakdown = [];
+  properties.forEach(p => {
+    const monthly = toNum(p.monthlyRent);
+    const months = toNum(p.months || 12);
+    const gross = monthly * months;
+    let income = 0, exempt = 0;
+    let note = "";
+    if (p.type === "general") {
+      // 一般出租: 43%必要費用
+      const expenseRatio = p.expenseRatio !== undefined && p.expenseRatio !== "" ? Number(p.expenseRatio) : params.rentExpenseRatio;
+      income = gross * (1 - expenseRatio);
+      note = `必要費用 ${(expenseRatio * 100).toFixed(0)}%`;
+    } else if (p.type === "public") {
+      // 公益出租人: 每月免稅 15,000,超出部分必要費用 60%
+      const exemptMonthly = Math.min(monthly, params.publicLandlordExempt);
+      const overMonthly = Math.max(0, monthly - params.publicLandlordExempt);
+      exempt = exemptMonthly * months;
+      const overGross = overMonthly * months;
+      income = overGross * (1 - params.publicLandlordExpense);
+      note = `每月免稅 ${fmt(params.publicLandlordExempt)},超出部分費用率 60%`;
+    } else if (p.type === "subletAgent") {
+      // 包租代管: 每月免稅 15,000,超出部分必要費用 60% (與公益出租人類似的優惠)
+      const exemptMonthly = Math.min(monthly, params.publicLandlordExempt);
+      const overMonthly = Math.max(0, monthly - params.publicLandlordExempt);
+      exempt = exemptMonthly * months;
+      const overGross = overMonthly * months;
+      income = overGross * (1 - params.publicLandlordExpense);
+      note = `包租代管,每月免稅 ${fmt(params.publicLandlordExempt)},超出部分費用率 60%`;
+    } else if (p.type === "taxFree") {
+      // 免稅紀錄: 不報稅
+      income = 0;
+      exempt = gross;
+      note = "免稅租金紀錄,不計入所得";
+    } else {
+      income = gross * (1 - params.rentExpenseRatio);
+      note = "預設 43% 費用率";
+    }
+    taxable += income;
+    exempted += exempt;
+    breakdown.push({
+      ...p,
+      gross,
+      taxableIncome: Math.round(income),
+      exemptAmount: Math.round(exempt),
+      note,
+    });
+  });
+  return { taxable: Math.round(taxable), exempted: Math.round(exempted), breakdown };
+}
+
+function applyBrackets(netIncome, params) {
+  if (netIncome <= 0) return { tax: 0, rate: 0, deduct: 0 };
+  for (const b of params.brackets) {
+    if (netIncome <= b.upTo) {
+      return { tax: Math.max(0, Math.round(netIncome * b.rate - b.deduct)), rate: b.rate, deduct: b.deduct };
+    }
+  }
+  const last = params.brackets[params.brackets.length - 1];
+  return { tax: Math.max(0, Math.round(netIncome * last.rate - last.deduct)), rate: last.rate, deduct: last.deduct };
+}
+
+function computeTaxForFiling(filing, members, year) {
+  const params = TAX_PARAMS[year];
+  if (!params) return null;
+
+  // 收集申報戶的成員 (主納稅人 + 配偶 + 扶養親屬)
+  const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
+  const filers = filerIds.map(id => members.find(m => m.id === id)).filter(Boolean);
+  const hasSpouse = !!filing.spouseId;
+
+  // === 1. 各項所得 ===
+  let salaryGross = 0, salaryDeductible = 0;
+  let interest = 0, dividend = 0, rentalTaxable = 0, otherIncome = 0;
+  const rentalDetail = [];
+  let disabilityCount = 0, elderCount = 0, studentCount = 0;
+  let preschoolCount = 0;
+  let longTermCareCount = 0;
+
+  filers.forEach(m => {
+    const income = filing.memberIncome?.[m.id] || {};
+    const sal = toNum(income.salary);
+    salaryGross += sal;
+    // 薪資扣除額: 每人扣 218,000,但若薪資 < 218,000,只能扣實際薪資
+    salaryDeductible += Math.min(sal, params.salaryDeduction);
+    interest += toNum(income.interest);
+    dividend += toNum(income.dividend);
+    otherIncome += toNum(income.other);
+
+    // 租金 (從 properties 找出此人擁有的)
+    const myProps = (filing.properties || []).filter(p => p.ownerId === m.id);
+    const r = computeRentalIncome(myProps, params);
+    rentalTaxable += r.taxable;
+    rentalDetail.push({ memberId: m.id, ...r });
+
+    if (m.isDisabled) disabilityCount++;
+    if (m.age >= 70) elderCount++;
+    if (m.isStudent) studentCount++;
+    if (m.age !== undefined && m.age < 6) preschoolCount++;
+    if (m.needsLongTermCare) longTermCareCount++;
+  });
+
+  const grossIncome = salaryGross + interest + dividend + rentalTaxable + otherIncome;
+
+  // === 2. 免稅額 ===
+  const exemption = filers.reduce((sum, m) => {
+    return sum + (m.age >= 70 ? params.exemptionElder : params.exemption);
+  }, 0);
+
+  // === 3. 一般扣除額: 標準 vs 列舉 ===
+  const standardDeduction = hasSpouse ? params.standardCouple : params.standardSingle;
+
+  const itemized = filing.itemizedDeductions || {};
+  const donationGeneral = toNum(itemized.donationGeneral);     // 一般捐贈(限20%)
+  const donationUnlimited = toNum(itemized.donationUnlimited); // 不限額捐贈(政府/國防/勞軍等)
+  const insurancePersonal = toNum(itemized.insurancePersonal); // 人身保險費(每人上限24,000)
+  const insuranceHealth = toNum(itemized.insuranceHealth);     // 健保費(不限額)
+  const medical = toNum(itemized.medical);                     // 醫藥及生育費(不限額)
+  const disaster = toNum(itemized.disaster);                   // 災害損失
+  const mortgageInterest = toNum(itemized.mortgageInterest);   // 自用住宅購屋借款利息
+
+  // 捐贈上限: 一般捐贈不得超過綜合所得總額 20%
+  const donationGeneralCapped = Math.min(donationGeneral, grossIncome * 0.20);
+  // 保險費上限: 每人 24,000 (申報戶成員人數)
+  const insurancePersonalCapped = Math.min(insurancePersonal, filers.length * params.insuranceLimit);
+  // 自用住宅購屋借款利息: 實際利息 - 儲蓄投資扣除後餘額,上限 30 萬
+
+  const itemizedTotal =
+    donationGeneralCapped + donationUnlimited +
+    insurancePersonalCapped + insuranceHealth +
+    medical + disaster + mortgageInterest;
+
+  const useItemized = filing.deductionChoice === "itemized" ||
+    (filing.deductionChoice === "auto" && itemizedTotal > standardDeduction);
+
+  const generalDeduction = useItemized ? itemizedTotal : standardDeduction;
+
+  // === 4. 特別扣除額 ===
+  const savings = Math.min(interest, params.savingsDeduction);
+  const disabilityDed = disabilityCount * params.disabilityDeduction;
+  const educationDed = Math.min(studentCount, filers.length) * params.educationDeduction;
+  // 幼兒學前: 第一名定額,第二名以上提高 (依 114 年制度)
+  let preschoolDed = 0;
+  if (preschoolCount > 0) {
+    preschoolDed = params.preschoolFirst + Math.max(0, preschoolCount - 1) * params.preschoolOther;
+  }
+  const longTermCareDed = longTermCareCount * params.longTermCare;
+
+  // 薪資扣除額
+  const salarySD = salaryDeductible;
+
+  // 房租支出特別扣除額 (114 起為特別扣除額,上限 18 萬;但稅率 20% 以上不得扣)
+  const rentSupport = toNum(filing.rentSupportPaid);
+  // 先試算,真正能扣需看稅率,稍後處理
+  const rentSupportCapped = Math.min(rentSupport, params.rentDeduction);
+
+  // 自用住宅購屋借款利息: 真實扣除額 = max(0, 利息 - 儲蓄投資扣除額)
+  // 但因為儲蓄投資已在特扣處理,這裡列舉時要扣除
+  // (簡化處理: 若選列舉且利息支出 > savings,實際可列 = 利息 - savings,上限30萬)
+  let actualMortgage = 0;
+  if (useItemized && mortgageInterest > 0) {
+    actualMortgage = Math.min(Math.max(0, mortgageInterest - savings), params.mortgageLimit);
+  }
+  // 重算列舉合計 (扣除儲蓄投資後的房貸利息)
+  const itemizedTotalActual = useItemized ?
+    (donationGeneralCapped + donationUnlimited + insurancePersonalCapped + insuranceHealth + medical + disaster + actualMortgage)
+    : 0;
+  const generalDeductionActual = useItemized ? itemizedTotalActual : standardDeduction;
+
+  const specialBeforeRent = salarySD + savings + disabilityDed + educationDed + preschoolDed + longTermCareDed;
+
+  // === 5. 試算淨所得 (不含房租特扣) ===
+  const netBeforeRent = Math.max(0, grossIncome - exemption - generalDeductionActual - specialBeforeRent);
+  const taxResultBefore = applyBrackets(netBeforeRent, params);
+
+  // 房租支出特扣: 若稅率 < 20% 才可扣
+  let rentDeductActual = 0;
+  if (year >= 114 && rentSupportCapped > 0 && taxResultBefore.rate < 0.20) {
+    rentDeductActual = rentSupportCapped;
+  }
+
+  const specialTotal = specialBeforeRent + rentDeductActual;
+
+  // === 6. 基本生活費差額 ===
+  // 比較基準: 免稅額 + 一般扣除額 + 儲蓄+身障+教育+幼兒+長照+房租
+  const blcompare = exemption + generalDeductionActual + savings + disabilityDed + educationDed + preschoolDed + longTermCareDed + rentDeductActual;
+  const blTotal = filers.length * params.basicLivingExp;
+  const blDiff = Math.max(0, blTotal - blcompare);
+
+  // === 7. 淨所得 & 稅 ===
+  const netIncome = Math.max(0, grossIncome - exemption - generalDeductionActual - specialTotal - blDiff);
+  const taxResult = applyBrackets(netIncome, params);
+
+  // === 8. 標準 vs 列舉比較 (給使用者參考) ===
+  const altDeduction = useItemized ? standardDeduction : itemizedTotalActual;
+  const altGeneral = altDeduction;
+  const altNet = Math.max(0, grossIncome - exemption - altGeneral - specialTotal - blDiff);
+  const altTax = applyBrackets(altNet, params).tax;
+  const saving = altTax - taxResult.tax; // 若 > 0 表示目前選擇省了多少
+
+  return {
+    year,
+    params,
+    filers,
+    hasSpouse,
+    // 所得
+    salaryGross, interest, dividend, rentalTaxable, otherIncome, grossIncome,
+    rentalDetail,
+    // 扣除
+    exemption,
+    standardDeduction,
+    itemizedTotal: itemizedTotalActual,
+    useItemized,
+    generalDeduction: generalDeductionActual,
+    itemizedDetail: {
+      donationGeneral: donationGeneralCapped,
+      donationUnlimited,
+      insurancePersonal: insurancePersonalCapped,
+      insuranceHealth, medical, disaster,
+      mortgageInterest: actualMortgage,
+    },
+    // 特扣
+    salarySD, savings, disabilityDed, educationDed, preschoolDed, longTermCareDed, rentDeductActual,
+    specialTotal,
+    // 基本生活費
+    blTotal, blcompare, blDiff,
+    // 稅
+    netIncome,
+    taxRate: taxResult.rate,
+    taxDeductValue: taxResult.deduct,
+    tax: taxResult.tax,
+    // 比較
+    altDeduction: useItemized ? "standard" : "itemized",
+    altTax,
+    saving,
+  };
+}
+
+// ============================================================
+// 預設資料
+// ============================================================
+const SAMPLE_DATA = {
+  members: [],
+  filings: [],
+  properties: [],
+  meta: { lastSavedAt: null, version: 1 },
+};
+
+// ============================================================
+// 持久化 (localStorage)
+// ============================================================
+const STORAGE_KEY = "tw_tax_app_v1";
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return SAMPLE_DATA;
+    const parsed = JSON.parse(raw);
+    return { ...SAMPLE_DATA, ...parsed };
+  } catch (e) { return SAMPLE_DATA; }
+}
+function saveData(data) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...data, meta: { ...data.meta, lastSavedAt: new Date().toISOString() } }));
+  } catch (e) { console.error("save fail", e); }
+}
+
+// ============================================================
+// UI 元件: Sidebar
+// ============================================================
+const NAV_ITEMS = [
+  { id: "dashboard", label: "儀表板", icon: "◉", desc: "Overview" },
+  { id: "members",   label: "家庭成員", icon: "❀", desc: "Family Members" },
+  { id: "properties",label: "出租物件", icon: "▤", desc: "Rental Properties" },
+  { id: "filing",    label: "本年度試算", icon: "✎", desc: "Tax Filing" },
+  { id: "compare",   label: "扣除額比較", icon: "⚖", desc: "Deduction Compare" },
+  { id: "history",   label: "歷史紀錄", icon: "❡", desc: "History" },
+  { id: "data",      label: "資料管理", icon: "⛁", desc: "Backup & Restore" },
+  { id: "help",      label: "稅務參考", icon: "?", desc: "Tax Reference" },
+];
+
+function Sidebar({ current, onNav, year, onYearChange, data }) {
+  return (
+    <aside className="w-64 flex-shrink-0 h-screen flex flex-col" style={{ background: "var(--bg-sidebar)", color: "#d8d3c7" }}>
+      <div className="px-5 py-6" style={{ borderBottom: "1px solid #2d3138" }}>
+        <div className="ornament mb-2">FAMILY TAX OFFICE</div>
+        <div className="font-serif text-xl text-white leading-tight">家族綜所稅<br/>試算暨節稅系統</div>
+        <div className="text-xs mt-2" style={{ color: "#8a8f97" }}>v1.0 · 中華民國</div>
+      </div>
+
+      <div className="px-5 py-4" style={{ borderBottom: "1px solid #2d3138" }}>
+        <div className="ornament mb-1">TAX YEAR</div>
+        <select
+          value={year}
+          onChange={e => onYearChange(Number(e.target.value))}
+          className="w-full px-2 py-1.5 text-sm rounded"
+          style={{ background: "#25292f", color: "white", border: "1px solid #3a3f47" }}
+        >
+          {AVAILABLE_YEARS.map(y => (
+            <option key={y} value={y}>{TAX_PARAMS[y].label}</option>
+          ))}
+        </select>
+      </div>
+
+      <nav className="flex-1 py-3 overflow-y-auto">
+        {NAV_ITEMS.map(item => (
+          <button
+            key={item.id}
+            onClick={() => onNav(item.id)}
+            className={`sidebar-item w-full text-left px-5 py-3 flex items-center gap-3 relative ${current === item.id ? "active" : ""}`}
+          >
+            <span className="text-base w-5 text-center" style={{ color: current === item.id ? "var(--accent)" : "#8a8f97" }}>{item.icon}</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm" style={{ color: current === item.id ? "white" : "#d8d3c7" }}>{item.label}</div>
+              <div className="text-[10px] tracking-wider uppercase" style={{ color: "#6a6f77" }}>{item.desc}</div>
+            </div>
+          </button>
+        ))}
+      </nav>
+
+      <div className="px-5 py-4 text-xs" style={{ borderTop: "1px solid #2d3138", color: "#6a6f77" }}>
+        <div className="ornament mb-2">STATISTICS</div>
+        <div className="flex justify-between py-0.5"><span>成員</span><span className="num">{data.members.length}</span></div>
+        <div className="flex justify-between py-0.5"><span>出租物件</span><span className="num">{data.properties.length}</span></div>
+        <div className="flex justify-between py-0.5"><span>歷年紀錄</span><span className="num">{data.filings.length}</span></div>
+      </div>
+    </aside>
+  );
+}
+
+// ============================================================
+// Page Header (頁面標頭)
+// ============================================================
+function PageHeader({ title, subtitle, ornament, right }) {
+  return (
+    <div className="mb-6 flex items-end justify-between">
+      <div>
+        <div className="ornament mb-1">{ornament}</div>
+        <h1 className="font-serif text-3xl" style={{ color: "var(--ink)" }}>{title}</h1>
+        {subtitle && <div className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>{subtitle}</div>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+// ============================================================
+// Dashboard 頁
+// ============================================================
+function Dashboard({ data, year, setPage }) {
+  const yearFilings = data.filings.filter(f => f.year === year);
+  const results = yearFilings.map(f => computeTaxForFiling(f, data.members, year));
+  const totalTax = results.reduce((s, r) => s + (r?.tax || 0), 0);
+  const totalIncome = results.reduce((s, r) => s + (r?.grossIncome || 0), 0);
+  const totalSaving = results.reduce((s, r) => s + Math.max(0, r?.saving || 0), 0);
+
+  // 歷年比較
+  const yearTotals = AVAILABLE_YEARS.map(y => {
+    const fs = data.filings.filter(f => f.year === y);
+    const rs = fs.map(f => computeTaxForFiling(f, data.members, y));
+    return {
+      year: y,
+      tax: rs.reduce((s, r) => s + (r?.tax || 0), 0),
+      income: rs.reduce((s, r) => s + (r?.grossIncome || 0), 0),
+      count: fs.length,
+    };
+  }).reverse();
+
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament={`§ DASHBOARD · ${year} 年度`}
+        title="家族稅務總覽"
+        subtitle={`${TAX_PARAMS[year].label} · 共 ${yearFilings.length} 個申報戶`}
+        right={
+          <div className="text-right text-xs" style={{ color: "var(--ink-mute)" }}>
+            <div>最後更新</div>
+            <div className="num">{data.meta.lastSavedAt ? new Date(data.meta.lastSavedAt).toLocaleString("zh-TW") : "—"}</div>
+          </div>
+        }
+      />
+
+      {/* 主要數字 */}
+      <div className="grid grid-cols-4 gap-4 mb-8">
+        <div className="card p-5">
+          <div className="ornament">TOTAL GROSS INCOME</div>
+          <div className="font-serif text-3xl num mt-2" style={{ color: "var(--ink)" }}>{fmt(totalIncome)}</div>
+          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>全戶綜合所得總額 (TWD)</div>
+        </div>
+        <div className="card p-5" style={{ borderColor: "var(--accent)" }}>
+          <div className="ornament" style={{ color: "var(--accent-deep)" }}>TAX PAYABLE</div>
+          <div className="font-serif text-3xl num mt-2" style={{ color: "var(--accent-deep)" }}>{fmt(totalTax)}</div>
+          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>應納稅額 (TWD)</div>
+        </div>
+        <div className="card p-5">
+          <div className="ornament">EFFECTIVE RATE</div>
+          <div className="font-serif text-3xl num mt-2" style={{ color: "var(--ink)" }}>
+            {totalIncome > 0 ? (totalTax / totalIncome * 100).toFixed(2) : "0.00"}<span className="text-base ml-1">%</span>
+          </div>
+          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>實際稅率</div>
+        </div>
+        <div className="card p-5" style={{ borderColor: "var(--green)" }}>
+          <div className="ornament" style={{ color: "#3d5235" }}>SAVINGS vs ALT</div>
+          <div className="font-serif text-3xl num mt-2" style={{ color: "#3d5235" }}>{fmt(totalSaving)}</div>
+          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>選對扣除額省下</div>
+        </div>
+      </div>
+
+      {/* 申報戶清單 */}
+      <div className="card mb-8">
+        <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+          <div className="ornament">FILING HOUSEHOLDS · {year}</div>
+          <button onClick={() => setPage("filing")} className="btn-secondary text-xs">管理申報戶 →</button>
+        </div>
+        {yearFilings.length === 0 ? (
+          <div className="px-5 py-12 text-center" style={{ color: "var(--ink-mute)" }}>
+            <div className="text-4xl mb-3">∅</div>
+            <div className="text-sm">{year} 年度尚無申報戶資料</div>
+            <button onClick={() => setPage("filing")} className="btn-primary mt-4 text-sm">建立第一個申報戶</button>
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>成員</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>綜合所得</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>淨所得</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>稅率</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>扣除額</th>
+                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應納稅</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => {
+                const f = yearFilings[i];
+                return (
+                  <tr key={f.id} className="table-row">
+                    <td className="px-5 py-3">
+                      <div className="font-medium">{f.name || "(未命名)"}</div>
+                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{r.hasSpouse ? "夫妻合併" : "個人申報"}</div>
+                    </td>
+                    <td className="px-3 py-3 text-xs">{r.filers.map(m => m.name).join("、")}</td>
+                    <td className="px-3 py-3 text-right num">{fmt(r.grossIncome)}</td>
+                    <td className="px-3 py-3 text-right num">{fmt(r.netIncome)}</td>
+                    <td className="px-3 py-3 text-center">
+                      <span className="chip chip-accent">{(r.taxRate * 100).toFixed(0)}%</span>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <span className={`chip ${r.useItemized ? "chip-green" : "chip-amber"}`}>
+                        {r.useItemized ? "列舉" : "標準"}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right num font-serif text-base">{fmt(r.tax)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* 歷年比較 */}
+      <div className="card">
+        <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)" }}>
+          <div className="ornament">HISTORICAL COMPARISON · 歷年比較</div>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+              <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年度</th>
+              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
+              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>綜合所得</th>
+              <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應納稅額</th>
+            </tr>
+          </thead>
+          <tbody>
+            {yearTotals.map(y => (
+              <tr key={y.year} className="table-row">
+                <td className="px-5 py-3 font-serif">{y.year} 年度</td>
+                <td className="px-3 py-3 text-right num">{y.count}</td>
+                <td className="px-3 py-3 text-right num">{fmt(y.income)}</td>
+                <td className="px-5 py-3 text-right num font-serif">{fmt(y.tax)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 家庭成員管理
+// ============================================================
+function MembersPage({ data, setData }) {
+  const [editing, setEditing] = useState(null);
+  const blank = { id: "", name: "", relation: "self", age: "", isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "", note: "" };
+
+  const save = (m) => {
+    let next;
+    if (editing && editing.id) {
+      next = data.members.map(x => x.id === m.id ? m : x);
+    } else {
+      next = [...data.members, { ...m, id: uid() }];
+    }
+    setData({ ...data, members: next });
+    setEditing(null);
+  };
+
+  const remove = (id) => {
+    if (!confirm("確定刪除此成員?所有相關申報資料中對該成員的引用也會失效。")) return;
+    setData({ ...data, members: data.members.filter(m => m.id !== id) });
+  };
+
+  const RELATIONS = {
+    self: "本人", spouse: "配偶", child: "子女", parent: "父母", grandparent: "祖父母",
+    sibling: "兄弟姊妹", other: "其他親屬"
+  };
+
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament="§ FAMILY MEMBERS · 家庭成員"
+        title="成員名冊"
+        subtitle="管理所有家族成員的基本資料,作為申報戶的依據"
+        right={<button className="btn-primary text-sm" onClick={() => setEditing({ ...blank })}>+ 新增成員</button>}
+      />
+
+      {data.members.length === 0 ? (
+        <div className="card p-12 text-center" style={{ color: "var(--ink-mute)" }}>
+          <div className="text-4xl mb-3">❀</div>
+          <div className="font-serif text-lg mb-1">尚無成員資料</div>
+          <div className="text-sm">先建立家族成員,再去申報戶頁面組合申報關係</div>
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>姓名</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>身分證末四碼</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>關係</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年齡</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>特殊身分</th>
+                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.members.map(m => (
+                <tr key={m.id} className="table-row">
+                  <td className="px-5 py-3 font-medium">{m.name}</td>
+                  <td className="px-3 py-3 num text-xs" style={{ color: "var(--ink-mute)" }}>{m.idNumber || "—"}</td>
+                  <td className="px-3 py-3"><span className="chip">{RELATIONS[m.relation] || m.relation}</span></td>
+                  <td className="px-3 py-3 text-center num">{m.age || "—"}</td>
+                  <td className="px-3 py-3 space-x-1">
+                    {m.isDisabled && <span className="chip chip-amber">身心障礙</span>}
+                    {m.age >= 70 && <span className="chip chip-accent">70歲以上</span>}
+                    {m.isStudent && <span className="chip chip-green">在學</span>}
+                    {m.needsLongTermCare && <span className="chip chip-red">需長照</span>}
+                    {m.age !== "" && Number(m.age) < 6 && <span className="chip chip-green">幼兒</span>}
+                  </td>
+                  <td className="px-5 py-3 text-right space-x-1">
+                    <button className="btn-secondary text-xs" onClick={() => setEditing(m)}>編輯</button>
+                    <button className="btn-danger text-xs" onClick={() => remove(m.id)}>刪除</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {editing && (
+        <MemberModal
+          member={editing}
+          onSave={save}
+          onClose={() => setEditing(null)}
+          relations={RELATIONS}
+        />
+      )}
+    </div>
+  );
+}
+
+function MemberModal({ member, onSave, onClose, relations }) {
+  const [m, setM] = useState({ ...member });
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(26,29,35,0.4)" }} onClick={onClose}>
+      <div className="card w-[480px] p-6" onClick={e => e.stopPropagation()}>
+        <div className="ornament mb-2">{m.id ? "EDIT MEMBER" : "NEW MEMBER"}</div>
+        <h2 className="font-serif text-xl mb-4">{m.id ? "編輯成員" : "新增成員"}</h2>
+
+        <div className="space-y-3">
+          <Field label="姓名">
+            <input className="input-text-plain w-full" value={m.name} onChange={e => setM({...m, name: e.target.value})} />
+          </Field>
+          <Field label="身分證末四碼 (識別用,選填)">
+            <input className="input-text w-full" value={m.idNumber} maxLength={4} onChange={e => setM({...m, idNumber: e.target.value})} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="關係">
+              <select className="input-text-plain w-full" value={m.relation} onChange={e => setM({...m, relation: e.target.value})}>
+                {Object.entries(relations).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </Field>
+            <Field label="年齡">
+              <input type="number" className="input-text w-full" value={m.age} onChange={e => setM({...m, age: e.target.value === "" ? "" : Number(e.target.value)})} />
+            </Field>
+          </div>
+          <Field label="備註">
+            <input className="input-text-plain w-full" value={m.note} onChange={e => setM({...m, note: e.target.value})} />
+          </Field>
+          <div className="grid grid-cols-2 gap-2 pt-2">
+            <Toggle label="身心障礙" value={m.isDisabled} onChange={v => setM({...m, isDisabled: v})} hint="可扣 218,000" />
+            <Toggle label="在學中" value={m.isStudent} onChange={v => setM({...m, isStudent: v})} hint="教育學費扣除" />
+            <Toggle label="需長期照顧" value={m.needsLongTermCare} onChange={v => setM({...m, needsLongTermCare: v})} hint="長照扣除 120,000" />
+          </div>
+        </div>
+
+        <div className="flex gap-2 justify-end mt-6">
+          <button className="btn-secondary" onClick={onClose}>取消</button>
+          <button className="btn-primary" onClick={() => { if (!m.name) return alert("請輸入姓名"); onSave(m); }}>儲存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, hint, children }) {
+  return (
+    <div>
+      <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>{label}</label>
+      {children}
+      {hint && <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>{hint}</div>}
+    </div>
+  );
+}
+
+function Toggle({ label, value, onChange, hint }) {
+  return (
+    <label className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-gray-50">
+      <input type="checkbox" checked={value} onChange={e => onChange(e.target.checked)} className="mt-0.5" />
+      <div>
+        <div className="text-sm">{label}</div>
+        {hint && <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{hint}</div>}
+      </div>
+    </label>
+  );
+}
+
+// ============================================================
+// 出租物件管理
+// ============================================================
+function PropertiesPage({ data, setData, year }) {
+  const [editing, setEditing] = useState(null);
+  const params = TAX_PARAMS[year];
+
+  const blank = {
+    id: "", name: "", address: "", ownerId: data.members[0]?.id || "",
+    type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43,
+    note: "", taxFreeReason: ""
+  };
+
+  const save = (p) => {
+    let next;
+    if (editing && editing.id) {
+      next = data.properties.map(x => x.id === p.id ? p : x);
+    } else {
+      next = [...data.properties, { ...p, id: uid() }];
+    }
+    setData({ ...data, properties: next });
+    setEditing(null);
+  };
+
+  const remove = (id) => {
+    if (!confirm("確定刪除此物件?")) return;
+    setData({ ...data, properties: data.properties.filter(p => p.id !== id) });
+  };
+
+  const TYPES = {
+    general: { label: "一般出租", chip: "chip-amber", desc: "43% 必要費用" },
+    public: { label: "公益出租人", chip: "chip-green", desc: "每月免稅 15,000" },
+    subletAgent: { label: "包租代管", chip: "chip-green", desc: "每月免稅 15,000" },
+    taxFree: { label: "免稅紀錄", chip: "chip-accent", desc: "不報稅,留底" },
+  };
+
+  // 預先算每個物件的應稅與免稅金額
+  const enriched = data.properties.map(p => {
+    const r = computeRentalIncome([p], params);
+    return { ...p, computed: r.breakdown[0] };
+  });
+
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament="§ RENTAL PROPERTIES · 出租物件"
+        title="租賃所得管理"
+        subtitle={`管理家族所有出租物件 · 套用 ${year} 年度稅務參數`}
+        right={
+          <button className="btn-primary text-sm" disabled={data.members.length === 0}
+            onClick={() => setEditing({ ...blank })}>+ 新增物件</button>
+        }
+      />
+
+      {/* 類型說明 */}
+      <div className="grid grid-cols-4 gap-3 mb-6">
+        {Object.entries(TYPES).map(([k, v]) => (
+          <div key={k} className="card p-3">
+            <span className={`chip ${v.chip} mb-2`}>{v.label}</span>
+            <div className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>{v.desc}</div>
+          </div>
+        ))}
+      </div>
+
+      {data.properties.length === 0 ? (
+        <div className="card p-12 text-center" style={{ color: "var(--ink-mute)" }}>
+          <div className="text-4xl mb-3">▤</div>
+          <div className="font-serif text-lg mb-1">尚無出租物件</div>
+          <div className="text-sm">
+            {data.members.length === 0 ? "請先新增家庭成員,再來新增物件" : "點右上角「新增物件」開始"}
+          </div>
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>月租</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>月數</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年收入</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應稅所得</th>
+                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enriched.map(p => {
+                const owner = data.members.find(m => m.id === p.ownerId);
+                const t = TYPES[p.type] || TYPES.general;
+                return (
+                  <tr key={p.id} className="table-row">
+                    <td className="px-5 py-3">
+                      <div className="font-medium">{p.name || "(未命名)"}</div>
+                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address || ""}</div>
+                    </td>
+                    <td className="px-3 py-3">{owner?.name || "—"}</td>
+                    <td className="px-3 py-3"><span className={`chip ${t.chip}`}>{t.label}</span></td>
+                    <td className="px-3 py-3 text-right num">{fmt(p.monthlyRent)}</td>
+                    <td className="px-3 py-3 text-center num">{p.months}</td>
+                    <td className="px-3 py-3 text-right num">{fmt(p.computed.gross)}</td>
+                    <td className="px-3 py-3 text-right num">
+                      <div>{fmt(p.computed.taxableIncome)}</div>
+                      {p.computed.exemptAmount > 0 && <div className="text-xs" style={{ color: "var(--green)" }}>免 {fmt(p.computed.exemptAmount)}</div>}
+                    </td>
+                    <td className="px-5 py-3 text-right space-x-1">
+                      <button className="btn-secondary text-xs" onClick={() => setEditing(p)}>編輯</button>
+                      <button className="btn-danger text-xs" onClick={() => remove(p.id)}>刪除</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {editing && (
+        <PropertyModal
+          property={editing}
+          members={data.members}
+          types={TYPES}
+          params={params}
+          onSave={save}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function PropertyModal({ property, members, types, params, onSave, onClose }) {
+  const [p, setP] = useState({ ...property });
+  const preview = computeRentalIncome([p], params).breakdown[0];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(26,29,35,0.4)" }} onClick={onClose}>
+      <div className="card w-[600px] max-h-[90vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
+        <div className="ornament mb-2">{p.id ? "EDIT PROPERTY" : "NEW PROPERTY"}</div>
+        <h2 className="font-serif text-xl mb-4">{p.id ? "編輯物件" : "新增出租物件"}</h2>
+
+        <div className="space-y-3">
+          <Field label="物件名稱 (例: 中山北路一段套房)">
+            <input className="input-text-plain w-full" value={p.name} onChange={e => setP({...p, name: e.target.value})} />
+          </Field>
+          <Field label="地址">
+            <input className="input-text-plain w-full" value={p.address} onChange={e => setP({...p, address: e.target.value})} />
+          </Field>
+          <Field label="屋主 (誰要把租金收入計入所得)">
+            <select className="input-text-plain w-full" value={p.ownerId} onChange={e => setP({...p, ownerId: e.target.value})}>
+              {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </Field>
+
+          <Field label="出租類型" hint="不同類型適用不同的稅務處理方式">
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              {Object.entries(types).map(([k, v]) => (
+                <label key={k} className={`p-2 border rounded cursor-pointer ${p.type === k ? 'border-2' : ''}`}
+                  style={{ borderColor: p.type === k ? "var(--accent)" : "var(--line)", background: p.type === k ? "#fafaf6" : "white" }}>
+                  <input type="radio" name="type" value={k} checked={p.type === k} onChange={e => setP({...p, type: e.target.value})} className="mr-2"/>
+                  <span className="text-sm font-medium">{v.label}</span>
+                  <div className="text-xs ml-5" style={{ color: "var(--ink-mute)" }}>{v.desc}</div>
+                </label>
+              ))}
+            </div>
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="月租金 (元)">
+              <input type="number" className="input-text w-full" value={p.monthlyRent} onChange={e => setP({...p, monthlyRent: Number(e.target.value)})} />
+            </Field>
+            <Field label="出租月數 (一年內)">
+              <input type="number" className="input-text w-full" value={p.months} min={1} max={12} onChange={e => setP({...p, months: Number(e.target.value)})} />
+            </Field>
+          </div>
+
+          {p.type === "general" && (
+            <Field label="必要費用率" hint="預設 43%(財政部標準),若有實際成本可以列舉,需檢附證明">
+              <select className="input-text-plain w-full" value={p.expenseRatio} onChange={e => setP({...p, expenseRatio: Number(e.target.value)})}>
+                <option value={0.43}>43% (標準)</option>
+                <option value={0.50}>50%</option>
+                <option value={0.60}>60%</option>
+                <option value={0.70}>70%</option>
+              </select>
+            </Field>
+          )}
+
+          {p.type === "taxFree" && (
+            <Field label="免稅原因" hint="(內部紀錄用) 例: 自住、無償提供親屬使用、現金交易未列報">
+              <input className="input-text-plain w-full" value={p.taxFreeReason} onChange={e => setP({...p, taxFreeReason: e.target.value})} />
+            </Field>
+          )}
+
+          <Field label="備註">
+            <textarea className="input-text-plain w-full" rows={2} value={p.note} onChange={e => setP({...p, note: e.target.value})} />
+          </Field>
+
+          {/* 計算預覽 */}
+          <div className="p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <div className="ornament mb-2">PREVIEW · 試算預覽</div>
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>年總收入</div>
+                <div className="num font-serif text-lg">{fmt(preview?.gross)}</div>
+              </div>
+              <div>
+                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>免稅部分</div>
+                <div className="num font-serif text-lg" style={{ color: "var(--green)" }}>{fmt(preview?.exemptAmount)}</div>
+              </div>
+              <div>
+                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>應稅所得</div>
+                <div className="num font-serif text-lg" style={{ color: "var(--accent-deep)" }}>{fmt(preview?.taxableIncome)}</div>
+              </div>
+            </div>
+            <div className="text-xs mt-2" style={{ color: "var(--ink-mute)" }}>{preview?.note}</div>
+          </div>
+        </div>
+
+        <div className="flex gap-2 justify-end mt-6">
+          <button className="btn-secondary" onClick={onClose}>取消</button>
+          <button className="btn-primary" onClick={() => { if (!p.name) return alert("請輸入物件名稱"); if (!p.ownerId) return alert("請選擇屋主"); onSave(p); }}>儲存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 申報戶試算 (核心頁)
+// ============================================================
+function FilingPage({ data, setData, year, setPage }) {
+  const yearFilings = data.filings.filter(f => f.year === year);
+  const [selectedId, setSelectedId] = useState(yearFilings[0]?.id || null);
+  const selected = yearFilings.find(f => f.id === selectedId);
+
+  useEffect(() => {
+    if (yearFilings.length > 0 && !yearFilings.find(f => f.id === selectedId)) {
+      setSelectedId(yearFilings[0].id);
+    }
+  }, [year, data.filings]);
+
+  const addFiling = () => {
+    const newFiling = {
+      id: uid(),
+      year,
+      name: `${year}年度·新申報戶`,
+      taxpayerId: data.members[0]?.id || "",
+      spouseId: "",
+      dependentIds: [],
+      memberIncome: {},
+      properties: data.properties.map(p => p.id), // 預設套用所有物件 (使用 id 即可)
+      // 但其實我們直接用 data.properties 內容來算 (要看哪個 owner 在這申報戶中)
+      itemizedDeductions: {
+        donationGeneral: 0, donationUnlimited: 0,
+        insurancePersonal: 0, insuranceHealth: 0,
+        medical: 0, disaster: 0, mortgageInterest: 0,
+      },
+      rentSupportPaid: 0,
+      deductionChoice: "auto", // auto / standard / itemized
+    };
+    setData({ ...data, filings: [...data.filings, newFiling] });
+    setSelectedId(newFiling.id);
+  };
+
+  const updateFiling = (next) => {
+    setData({ ...data, filings: data.filings.map(f => f.id === next.id ? next : f) });
+  };
+
+  const deleteFiling = (id) => {
+    if (!confirm("確定刪除此申報戶?")) return;
+    setData({ ...data, filings: data.filings.filter(f => f.id !== id) });
+    if (selectedId === id) setSelectedId(null);
+  };
+
+  const cloneFromLastYear = () => {
+    // 找上一年度同名申報戶
+    const prevYear = year - 1;
+    const candidates = data.filings.filter(f => f.year === prevYear);
+    if (candidates.length === 0) return alert(`找不到 ${prevYear} 年度的申報戶可複製`);
+    const src = candidates[0];
+    const newFiling = { ...src, id: uid(), year, name: src.name.replace(`${prevYear}年`, `${year}年`) || `${year}年度` };
+    setData({ ...data, filings: [...data.filings, newFiling] });
+    setSelectedId(newFiling.id);
+  };
+
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament={`§ TAX FILING · ${year} 年度試算`}
+        title="申報戶與稅額試算"
+        subtitle="每個申報戶獨立試算 · 系統自動比較標準/列舉扣除額,選擇較划算者"
+        right={
+          <div className="space-x-2">
+            <button className="btn-secondary text-sm" onClick={cloneFromLastYear}>↻ 複製上年度</button>
+            <button className="btn-primary text-sm" onClick={addFiling}
+              disabled={data.members.length === 0}>+ 新增申報戶</button>
+          </div>
+        }
+      />
+
+      {yearFilings.length === 0 ? (
+        <div className="card p-12 text-center" style={{ color: "var(--ink-mute)" }}>
+          <div className="text-4xl mb-3">✎</div>
+          <div className="font-serif text-lg mb-1">{year} 年度尚無申報戶</div>
+          <div className="text-sm">
+            {data.members.length === 0 ? "請先到「家庭成員」頁面建立成員" : "點右上角「新增申報戶」開始試算"}
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-[260px_1fr] gap-5">
+          {/* 申報戶清單 */}
+          <div className="card overflow-hidden" style={{ alignSelf: "flex-start" }}>
+            <div className="px-3 py-2 ornament" style={{ borderBottom: "1px solid var(--line)" }}>HOUSEHOLDS</div>
+            {yearFilings.map(f => {
+              const r = computeTaxForFiling(f, data.members, year);
+              return (
+                <button key={f.id} onClick={() => setSelectedId(f.id)}
+                  className={`w-full text-left px-3 py-3 border-b ${selectedId === f.id ? "" : "hover:bg-gray-50"}`}
+                  style={{ borderColor: "var(--line-soft)", background: selectedId === f.id ? "#fafaf6" : "white",
+                    borderLeft: selectedId === f.id ? "3px solid var(--accent)" : "3px solid transparent" }}>
+                  <div className="text-sm font-medium truncate">{f.name}</div>
+                  <div className="text-xs num mt-1" style={{ color: "var(--ink-mute)" }}>應納 {fmt(r?.tax || 0)}</div>
+                  <div className="flex gap-1 mt-1">
+                    {r?.hasSpouse && <span className="chip text-[10px]">夫妻</span>}
+                    {r?.useItemized && <span className="chip chip-green text-[10px]">列舉</span>}
+                    {!r?.useItemized && <span className="chip chip-amber text-[10px]">標準</span>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 申報戶詳細 */}
+          {selected && (
+            <FilingDetail
+              filing={selected}
+              members={data.members}
+              properties={data.properties}
+              year={year}
+              onChange={updateFiling}
+              onDelete={() => deleteFiling(selected.id)}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilingDetail({ filing, members, properties, year, onChange, onDelete }) {
+  // 把 properties 過濾出屬於這申報戶的人持有的
+  const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
+  const householdProperties = properties.filter(p => filerIds.includes(p.ownerId));
+  const filingForCompute = { ...filing, properties: householdProperties };
+  const result = computeTaxForFiling(filingForCompute, members, year);
+  const params = TAX_PARAMS[year];
+
+  const taxpayer = members.find(m => m.id === filing.taxpayerId);
+  const spouse = members.find(m => m.id === filing.spouseId);
+
+  const updateField = (path, value) => {
+    const next = { ...filing };
+    const parts = path.split(".");
+    let obj = next;
+    for (let i = 0; i < parts.length - 1; i++) {
+      obj[parts[i]] = { ...obj[parts[i]] };
+      obj = obj[parts[i]];
+    }
+    obj[parts[parts.length - 1]] = value;
+    onChange(next);
+  };
+
+  const updateIncome = (memberId, key, value) => {
+    const next = {
+      ...filing,
+      memberIncome: {
+        ...filing.memberIncome,
+        [memberId]: { ...(filing.memberIncome?.[memberId] || {}), [key]: value }
+      }
+    };
+    onChange(next);
+  };
+
+  const toggleDependent = (id) => {
+    const list = filing.dependentIds || [];
+    const next = list.includes(id) ? list.filter(x => x !== id) : [...list, id];
+    onChange({ ...filing, dependentIds: next });
+  };
+
+  if (!result) return null;
+
+  return (
+    <div className="space-y-5">
+      {/* 標題列 */}
+      <div className="card p-5">
+        <div className="flex items-center gap-3 mb-3">
+          <input
+            className="font-serif text-2xl flex-1 px-2 py-1 border-b-2"
+            style={{ borderColor: "var(--line)", background: "transparent" }}
+            value={filing.name}
+            onChange={e => onChange({ ...filing, name: e.target.value })}
+          />
+          <button className="btn-danger text-sm" onClick={onDelete}>刪除此申報戶</button>
+        </div>
+
+        {/* 申報戶成員選擇 */}
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="主納稅義務人">
+            <select className="input-text-plain w-full" value={filing.taxpayerId}
+              onChange={e => onChange({ ...filing, taxpayerId: e.target.value })}>
+              <option value="">— 請選擇 —</option>
+              {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </Field>
+          <Field label="配偶 (合併申報)">
+            <select className="input-text-plain w-full" value={filing.spouseId || ""}
+              onChange={e => onChange({ ...filing, spouseId: e.target.value })}>
+              <option value="">無 (單身申報)</option>
+              {members.filter(m => m.id !== filing.taxpayerId).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </Field>
+          <Field label="扶養親屬數">
+            <div className="input-text-plain w-full bg-gray-50">{(filing.dependentIds || []).length} 人</div>
+          </Field>
+        </div>
+
+        {/* 扶養親屬勾選 */}
+        <div className="mt-3">
+          <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>勾選扶養親屬:</div>
+          <div className="flex flex-wrap gap-2">
+            {members.filter(m => m.id !== filing.taxpayerId && m.id !== filing.spouseId).map(m => {
+              const checked = (filing.dependentIds || []).includes(m.id);
+              return (
+                <label key={m.id} className={`px-3 py-1.5 rounded cursor-pointer text-sm flex items-center gap-2 border`}
+                  style={{ borderColor: checked ? "var(--accent)" : "var(--line)", background: checked ? "var(--accent-soft)" : "white" }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleDependent(m.id)} />
+                  {m.name}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 各成員所得輸入 */}
+      <div className="card">
+        <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
+          ① INCOME · 各成員所得
+        </div>
+        <div className="p-5">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                <th className="text-left py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>成員</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>薪資</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>利息</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>租金 (自動)</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>其他</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.filers.map(m => {
+                const income = filing.memberIncome?.[m.id] || {};
+                const myProps = householdProperties.filter(p => p.ownerId === m.id);
+                const myRental = computeRentalIncome(myProps, params);
+                return (
+                  <tr key={m.id} className="table-row">
+                    <td className="py-2 font-medium">
+                      {m.name}
+                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                        {m.id === filing.taxpayerId ? "本人" : (m.id === filing.spouseId ? "配偶" : "扶養")}
+                      </div>
+                    </td>
+                    <td className="py-2 text-right">
+                      <input type="number" className="input-text w-28 text-right"
+                        value={income.salary || ""} onChange={e => updateIncome(m.id, "salary", e.target.value)} />
+                    </td>
+                    <td className="py-2 text-right">
+                      <input type="number" className="input-text w-24 text-right"
+                        value={income.interest || ""} onChange={e => updateIncome(m.id, "interest", e.target.value)} />
+                    </td>
+                    <td className="py-2 text-right">
+                      <input type="number" className="input-text w-24 text-right"
+                        value={income.dividend || ""} onChange={e => updateIncome(m.id, "dividend", e.target.value)} />
+                    </td>
+                    <td className="py-2 text-right num text-xs" title={myProps.map(p => p.name).join(", ")}>
+                      {fmt(myRental.taxable)}
+                      {myProps.length > 0 && <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{myProps.length} 物件</div>}
+                    </td>
+                    <td className="py-2 text-right">
+                      <input type="number" className="input-text w-24 text-right"
+                        value={income.other || ""} onChange={e => updateIncome(m.id, "other", e.target.value)} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="divider-double" style={{ background: "#fafaf6" }}>
+                <td className="py-3 font-medium">總計</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.salaryGross)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.interest)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.dividend)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.rentalTaxable)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.otherIncome)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      {/* 列舉扣除額輸入 */}
+      <div className="card">
+        <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+          <div className="ornament">② DEDUCTIONS · 一般扣除額</div>
+          <div className="flex gap-1">
+            {["auto", "standard", "itemized"].map(c => (
+              <button key={c} onClick={() => onChange({ ...filing, deductionChoice: c })}
+                className={`px-3 py-1 text-xs rounded border ${filing.deductionChoice === c ? "" : ""}`}
+                style={{
+                  background: filing.deductionChoice === c ? "var(--ink)" : "white",
+                  color: filing.deductionChoice === c ? "white" : "var(--ink-soft)",
+                  borderColor: filing.deductionChoice === c ? "var(--ink)" : "var(--line)",
+                }}>
+                {c === "auto" ? "自動選最划算" : c === "standard" ? "強制標準" : "強制列舉"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="p-5">
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <DeductionInput
+              label="一般捐贈" hint={`上限 = 綜合所得 20% = ${fmt(result.grossIncome * 0.2)}`}
+              value={filing.itemizedDeductions.donationGeneral}
+              onChange={v => updateField("itemizedDeductions.donationGeneral", v)} />
+            <DeductionInput
+              label="不限額捐贈" hint="政府/國防/勞軍/古蹟修復等,不限額"
+              value={filing.itemizedDeductions.donationUnlimited}
+              onChange={v => updateField("itemizedDeductions.donationUnlimited", v)} />
+            <DeductionInput
+              label="人身保險費" hint={`每人上限 24,000 × ${result.filers.length}人 = ${fmt(params.insuranceLimit * result.filers.length)}`}
+              value={filing.itemizedDeductions.insurancePersonal}
+              onChange={v => updateField("itemizedDeductions.insurancePersonal", v)} />
+            <DeductionInput
+              label="全民健保費" hint="不限額 (含補充保費)"
+              value={filing.itemizedDeductions.insuranceHealth}
+              onChange={v => updateField("itemizedDeductions.insuranceHealth", v)} />
+            <DeductionInput
+              label="醫藥及生育費" hint="不限額,須附醫療院所收據"
+              value={filing.itemizedDeductions.medical}
+              onChange={v => updateField("itemizedDeductions.medical", v)} />
+            <DeductionInput
+              label="災害損失" hint="不可抗力災害,需 30 日內報國稅局"
+              value={filing.itemizedDeductions.disaster}
+              onChange={v => updateField("itemizedDeductions.disaster", v)} />
+            <DeductionInput
+              label="自用住宅購屋借款利息"
+              hint={`一屋為限,實際扣除 = 利息 − 儲蓄利息 (上限 ${fmt(params.mortgageLimit)})`}
+              value={filing.itemizedDeductions.mortgageInterest}
+              onChange={v => updateField("itemizedDeductions.mortgageInterest", v)} />
+            <DeductionInput
+              label="自住房屋租金支出"
+              hint={`特扣 (114起改特扣,上限 ${fmt(params.rentDeduction)}),稅率20%以上不得扣`}
+              value={filing.rentSupportPaid}
+              onChange={v => onChange({ ...filing, rentSupportPaid: v })} />
+          </div>
+
+          {/* 標準 vs 列舉即時對比 */}
+          <div className="grid grid-cols-2 gap-3 mt-4">
+            <div className="p-3 rounded" style={{
+              background: result.useItemized ? "white" : "var(--green-soft)",
+              border: result.useItemized ? "1px solid var(--line)" : "2px solid var(--green)"
+            }}>
+              <div className="text-xs font-medium mb-1">標準扣除額 {!result.useItemized && "✓ 採用"}</div>
+              <div className="num font-serif text-xl">{fmt(result.standardDeduction)}</div>
+              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                {result.hasSpouse ? "夫妻合併 262,000" : "單身 131,000"}
+              </div>
+            </div>
+            <div className="p-3 rounded" style={{
+              background: result.useItemized ? "var(--green-soft)" : "white",
+              border: result.useItemized ? "2px solid var(--green)" : "1px solid var(--line)"
+            }}>
+              <div className="text-xs font-medium mb-1">列舉扣除額 {result.useItemized && "✓ 採用"}</div>
+              <div className="num font-serif text-xl">{fmt(result.itemizedTotal)}</div>
+              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                {result.itemizedTotal > result.standardDeduction
+                  ? `比標準多 ${fmt(result.itemizedTotal - result.standardDeduction)}`
+                  : `比標準少 ${fmt(result.standardDeduction - result.itemizedTotal)}`}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 試算結果 */}
+      <ResultPanel result={result} year={year} />
+
+      {/* 物件列表 (參考) */}
+      {householdProperties.length > 0 && (
+        <div className="card">
+          <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
+            ③ RENTAL PROPERTIES IN HOUSEHOLD · 本戶租賃所得明細
+          </div>
+          <table className="w-full text-sm">
+            <thead style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+              <tr>
+                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年收入</th>
+                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應稅所得</th>
+              </tr>
+            </thead>
+            <tbody>
+              {householdProperties.map(p => {
+                const owner = members.find(m => m.id === p.ownerId);
+                const r = computeRentalIncome([p], params).breakdown[0];
+                return (
+                  <tr key={p.id} className="table-row">
+                    <td className="px-5 py-2">{p.name}</td>
+                    <td className="px-3 py-2">{owner?.name}</td>
+                    <td className="px-3 py-2 text-xs">{r.note}</td>
+                    <td className="px-3 py-2 text-right num">{fmt(r.gross)}</td>
+                    <td className="px-5 py-2 text-right num font-medium">{fmt(r.taxableIncome)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeductionInput({ label, hint, value, onChange }) {
+  return (
+    <div>
+      <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>{label}</label>
+      <input type="number" className="input-text w-full text-right"
+        value={value || ""} onChange={e => onChange(Number(e.target.value) || 0)} />
+      <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>{hint}</div>
+    </div>
+  );
+}
+
+function ResultPanel({ result, year }) {
+  if (!result) return null;
+  return (
+    <div className="card" style={{ background: "#fdfcf7", borderColor: "var(--accent)" }}>
+      <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)", color: "var(--accent-deep)" }}>
+        ④ RESULT · 稅額試算結果
+      </div>
+      <div className="p-5">
+        <div className="grid grid-cols-2 gap-6">
+          {/* 計算明細 */}
+          <div className="space-y-1 text-sm">
+            <Row label="薪資所得" v={result.salaryGross} />
+            <Row label="利息所得" v={result.interest} />
+            <Row label="股利所得" v={result.dividend} />
+            <Row label="租賃所得 (應稅)" v={result.rentalTaxable} />
+            <Row label="其他所得" v={result.otherIncome} />
+            <Row label="綜合所得總額" v={result.grossIncome} bold border />
+            <Row label="− 免稅額" v={-result.exemption} muted />
+            <Row label={`− 一般扣除額 (${result.useItemized ? "列舉" : "標準"})`} v={-result.generalDeduction} muted />
+            <Row label="− 薪資特扣" v={-result.salarySD} muted />
+            <Row label="− 儲蓄投資特扣" v={-result.savings} muted />
+            {result.disabilityDed > 0 && <Row label="− 身心障礙特扣" v={-result.disabilityDed} muted />}
+            {result.educationDed > 0 && <Row label="− 教育學費特扣" v={-result.educationDed} muted />}
+            {result.preschoolDed > 0 && <Row label="− 幼兒學前特扣" v={-result.preschoolDed} muted />}
+            {result.longTermCareDed > 0 && <Row label="− 長期照顧特扣" v={-result.longTermCareDed} muted />}
+            {result.rentDeductActual > 0 && <Row label="− 房租支出特扣" v={-result.rentDeductActual} muted />}
+            {result.blDiff > 0 && <Row label="− 基本生活費差額" v={-result.blDiff} muted />}
+            <Row label="綜合所得淨額" v={result.netIncome} bold border />
+            <Row label={`適用稅率 ${(result.taxRate * 100).toFixed(0)}%`} v={Math.round(result.netIncome * result.taxRate)} muted />
+            <Row label="− 累進差額" v={-result.taxDeductValue} muted />
+          </div>
+
+          {/* 主數字 */}
+          <div className="flex flex-col justify-between">
+            <div>
+              <div className="text-center p-6 rounded mb-4" style={{ background: "var(--ink)", color: "white" }}>
+                <div className="ornament" style={{ color: "#a8a293" }}>YEAR {year} TAX PAYABLE</div>
+                <div className="font-serif text-5xl num mt-2">{fmt(result.tax)}</div>
+                <div className="text-xs mt-2" style={{ color: "#a8a293" }}>應納稅額 (新臺幣 元)</div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded text-center" style={{ background: "white", border: "1px solid var(--line)" }}>
+                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>實際稅率</div>
+                  <div className="font-serif text-xl num">
+                    {result.grossIncome > 0 ? (result.tax / result.grossIncome * 100).toFixed(2) : "0.00"}%
+                  </div>
+                </div>
+                <div className="p-3 rounded text-center" style={{ background: "white", border: "1px solid var(--line)" }}>
+                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>邊際稅率</div>
+                  <div className="font-serif text-xl num">{(result.taxRate * 100).toFixed(0)}%</div>
+                </div>
+              </div>
+            </div>
+
+            {/* 標準 vs 列舉節省 */}
+            {result.saving > 0 && (
+              <div className="mt-4 p-3 rounded" style={{ background: "var(--green-soft)", border: "1px solid var(--green)" }}>
+                <div className="text-xs font-medium" style={{ color: "#3d5235" }}>
+                  ✓ 採用「{result.useItemized ? "列舉" : "標準"}扣除額」比另一選項省了
+                </div>
+                <div className="num font-serif text-2xl" style={{ color: "#3d5235" }}>{fmt(result.saving)}</div>
+              </div>
+            )}
+            {result.saving === 0 && (
+              <div className="mt-4 p-3 rounded text-xs text-center" style={{ background: "#fafaf6", color: "var(--ink-mute)" }}>
+                標準扣除額與列舉扣除額試算結果相同
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, v, bold, muted, border }) {
+  return (
+    <div className={`flex justify-between py-1 ${border ? "border-t pt-2" : ""}`}
+      style={{ borderColor: "var(--line)", fontWeight: bold ? 600 : 400, color: muted ? "var(--ink-soft)" : "var(--ink)" }}>
+      <span className="text-xs">{label}</span>
+      <span className="num">{fmt(v)}</span>
+    </div>
+  );
+}
+
+// ============================================================
+// 扣除額比較頁
+// ============================================================
+function ComparePage({ data, year }) {
+  const yearFilings = data.filings.filter(f => f.year === year);
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament={`§ DEDUCTION COMPARISON · ${year} 年度`}
+        title="標準 vs 列舉扣除額"
+        subtitle="一次看所有申報戶適合哪個扣除額方式"
+      />
+      {yearFilings.length === 0 ? (
+        <div className="card p-12 text-center" style={{ color: "var(--ink-mute)" }}>請先在「本年度試算」建立申報戶</div>
+      ) : (
+        <div className="card">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>綜合所得</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>標準</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>列舉</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>推薦</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>採推薦稅額</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>採另一稅額</th>
+                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>節省</th>
+              </tr>
+            </thead>
+            <tbody>
+              {yearFilings.map(f => {
+                const filerIds = [f.taxpayerId, f.spouseId, ...(f.dependentIds || [])].filter(Boolean);
+                const householdProps = data.properties.filter(p => filerIds.includes(p.ownerId));
+                const filingForCompute = { ...f, properties: householdProps };
+                const result = computeTaxForFiling(filingForCompute, data.members, year);
+                if (!result) return null;
+                const recommended = result.itemizedTotal > result.standardDeduction ? "itemized" : "standard";
+                return (
+                  <tr key={f.id} className="table-row">
+                    <td className="px-5 py-3 font-medium">{f.name}</td>
+                    <td className="px-3 py-3 text-right num">{fmt(result.grossIncome)}</td>
+                    <td className="px-3 py-3 text-right num">{fmt(result.standardDeduction)}</td>
+                    <td className="px-3 py-3 text-right num">{fmt(result.itemizedTotal)}</td>
+                    <td className="px-3 py-3 text-center">
+                      <span className={`chip ${recommended === "itemized" ? "chip-green" : "chip-amber"}`}>
+                        {recommended === "itemized" ? "列舉" : "標準"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 text-right num font-medium">{fmt(Math.min(result.tax, result.altTax))}</td>
+                    <td className="px-3 py-3 text-right num" style={{ color: "var(--ink-mute)" }}>{fmt(Math.max(result.tax, result.altTax))}</td>
+                    <td className="px-5 py-3 text-right num font-medium" style={{ color: "var(--green)" }}>
+                      {fmt(Math.abs(result.tax - result.altTax))}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// 歷史紀錄
+// ============================================================
+function HistoryPage({ data }) {
+  // 以成員為主軸,看每個人歷年參與的申報戶與稅額分攤
+  const memberHistory = data.members.map(m => {
+    const records = [];
+    AVAILABLE_YEARS.forEach(y => {
+      const filings = data.filings.filter(f =>
+        f.year === y &&
+        (f.taxpayerId === m.id || f.spouseId === m.id || (f.dependentIds || []).includes(m.id))
+      );
+      filings.forEach(f => {
+        const filerIds = [f.taxpayerId, f.spouseId, ...(f.dependentIds || [])].filter(Boolean);
+        const householdProps = data.properties.filter(p => filerIds.includes(p.ownerId));
+        const result = computeTaxForFiling({ ...f, properties: householdProps }, data.members, y);
+        if (!result) return;
+        const income = f.memberIncome?.[m.id] || {};
+        const role = f.taxpayerId === m.id ? "本人" : (f.spouseId === m.id ? "配偶" : "扶養");
+        records.push({
+          year: y, role, filingName: f.name,
+          salary: toNum(income.salary), interest: toNum(income.interest),
+          dividend: toNum(income.dividend), other: toNum(income.other),
+          householdTax: result.tax,
+        });
+      });
+    });
+    return { member: m, records };
+  });
+
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament="§ HISTORICAL RECORDS · 歷年紀錄"
+        title="每位成員的歷史申報"
+        subtitle="按成員整理,可看出個人歷年所得變化與所屬申報戶稅額"
+      />
+
+      {memberHistory.filter(h => h.records.length > 0).length === 0 && (
+        <div className="card p-12 text-center" style={{ color: "var(--ink-mute)" }}>尚無歷史紀錄</div>
+      )}
+
+      {memberHistory.map(({ member, records }) => {
+        if (records.length === 0) return null;
+        return (
+          <div key={member.id} className="card mb-5">
+            <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+              <div>
+                <div className="font-serif text-lg">{member.name}</div>
+                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>共 {records.length} 筆紀錄</div>
+              </div>
+              <div className="text-right text-xs" style={{ color: "var(--ink-mute)" }}>
+                <div>累計薪資</div>
+                <div className="num font-serif text-base" style={{ color: "var(--ink)" }}>
+                  {fmt(records.reduce((s, r) => s + r.salary, 0))}
+                </div>
+              </div>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+                  <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年度</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>身分</th>
+                  <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>薪資</th>
+                  <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>利息</th>
+                  <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
+                  <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>其他</th>
+                  <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>戶總稅額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map((r, i) => (
+                  <tr key={i} className="table-row">
+                    <td className="px-5 py-2 font-serif">{r.year}</td>
+                    <td className="px-3 py-2">{r.filingName}</td>
+                    <td className="px-3 py-2"><span className="chip">{r.role}</span></td>
+                    <td className="px-3 py-2 text-right num">{fmt(r.salary)}</td>
+                    <td className="px-3 py-2 text-right num">{fmt(r.interest)}</td>
+                    <td className="px-3 py-2 text-right num">{fmt(r.dividend)}</td>
+                    <td className="px-3 py-2 text-right num">{fmt(r.other)}</td>
+                    <td className="px-5 py-2 text-right num font-medium">{fmt(r.householdTax)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// 資料管理 (匯入/匯出)
+// ============================================================
+function DataPage({ data, setData }) {
+  const fileRef = useRef(null);
+
+  const exportJson = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `家庭綜所稅備份_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importJson = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const obj = JSON.parse(ev.target.result);
+        if (!obj.members || !obj.filings) throw new Error("檔案格式不正確");
+        if (!confirm(`確定要匯入此檔案?\n成員: ${obj.members.length}, 申報戶: ${obj.filings.length}, 物件: ${obj.properties?.length || 0}\n\n這會覆蓋現有所有資料。`)) return;
+        setData({ ...SAMPLE_DATA, ...obj });
+        alert("匯入成功!");
+      } catch (err) {
+        alert("匯入失敗: " + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const clearAll = () => {
+    if (!confirm("確定清空所有資料?無法復原!")) return;
+    if (!confirm("再次確認:這會刪除所有成員、物件、申報資料")) return;
+    setData(SAMPLE_DATA);
+  };
+
+  const loadSample = () => {
+    if (data.members.length > 0 && !confirm("這會覆蓋現有資料,確定?")) return;
+    setData(SAMPLE_FAMILY);
+  };
+
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament="§ DATA MANAGEMENT · 資料管理"
+        title="備份、還原與匯出"
+        subtitle="所有資料儲存在你的瀏覽器本機,匯出 JSON 檔可備份或跨裝置使用"
+      />
+
+      <div className="grid grid-cols-2 gap-5">
+        <div className="card p-5">
+          <div className="ornament mb-2">EXPORT · 匯出備份</div>
+          <h3 className="font-serif text-lg mb-3">下載 JSON 備份檔</h3>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+            將所有家庭成員、租賃物件、歷年申報資料匯出為單一 JSON 檔。建議每次更新後備份一次。
+          </p>
+          <button className="btn-primary w-full" onClick={exportJson}>↓ 匯出所有資料</button>
+          <div className="text-xs mt-3 num" style={{ color: "var(--ink-mute)" }}>
+            最後儲存: {data.meta.lastSavedAt ? new Date(data.meta.lastSavedAt).toLocaleString("zh-TW") : "—"}
+          </div>
+        </div>
+
+        <div className="card p-5">
+          <div className="ornament mb-2">IMPORT · 匯入備份</div>
+          <h3 className="font-serif text-lg mb-3">從 JSON 檔還原</h3>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+            上傳先前匯出的 JSON 備份檔。<span style={{ color: "var(--red)" }}>注意:會覆蓋現有所有資料。</span>
+          </p>
+          <input type="file" accept=".json" ref={fileRef} onChange={importJson} className="hidden" />
+          <button className="btn-secondary w-full" onClick={() => fileRef.current?.click()}>↑ 選擇 JSON 檔匯入</button>
+        </div>
+
+        <div className="card p-5">
+          <div className="ornament mb-2">SAMPLE · 範例資料</div>
+          <h3 className="font-serif text-lg mb-3">載入範例家庭</h3>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+            載入一個七人家庭範例 (夫妻+子女+祖父母+單身手足),含多種租賃情境,快速體驗系統。
+          </p>
+          <button className="btn-secondary w-full" onClick={loadSample}>★ 載入範例家庭</button>
+        </div>
+
+        <div className="card p-5" style={{ borderColor: "var(--red)" }}>
+          <div className="ornament mb-2" style={{ color: "var(--red)" }}>DANGER · 危險區</div>
+          <h3 className="font-serif text-lg mb-3">清空所有資料</h3>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+            從頭開始,刪除所有家庭成員、物件、申報資料。建議先匯出備份。
+          </p>
+          <button className="btn-danger w-full" onClick={clearAll} style={{ border: "1px solid var(--red)" }}>清空所有資料</button>
+        </div>
+      </div>
+
+      <div className="card p-5 mt-5">
+        <div className="ornament mb-2">STORAGE INFO · 儲存資訊</div>
+        <div className="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <div className="text-xs" style={{ color: "var(--ink-mute)" }}>成員數</div>
+            <div className="num font-serif text-xl">{data.members.length}</div>
+          </div>
+          <div>
+            <div className="text-xs" style={{ color: "var(--ink-mute)" }}>物件數</div>
+            <div className="num font-serif text-xl">{data.properties.length}</div>
+          </div>
+          <div>
+            <div className="text-xs" style={{ color: "var(--ink-mute)" }}>申報戶歷史</div>
+            <div className="num font-serif text-xl">{data.filings.length}</div>
+          </div>
+        </div>
+        <div className="text-xs mt-3 p-3 rounded" style={{ background: "#fafaf6", color: "var(--ink-soft)" }}>
+          ※ 本系統不傳送資料到任何伺服器,所有資料只存在你的瀏覽器中 (localStorage)。
+          清除瀏覽器資料會遺失所有紀錄,請定期匯出 JSON 備份。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 稅務參考頁
+// ============================================================
+function HelpPage({ year }) {
+  const p = TAX_PARAMS[year];
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament="§ TAX REFERENCE · 稅務參考"
+        title={`${year} 年度速查表`}
+        subtitle="本系統採用的參數與計算規則一覽"
+      />
+
+      <div className="grid grid-cols-2 gap-5 mb-5">
+        <div className="card p-5">
+          <div className="ornament mb-3">免稅額 · EXEMPTION</div>
+          <table className="w-full text-sm">
+            <tbody>
+              <tr className="table-row"><td className="py-2">一般 (每人)</td><td className="text-right num">{fmt(p.exemption)}</td></tr>
+              <tr className="table-row"><td className="py-2">70 歲以上 (本人/配偶/直系尊親屬)</td><td className="text-right num">{fmt(p.exemptionElder)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="card p-5">
+          <div className="ornament mb-3">標準扣除額 · STANDARD DEDUCTION</div>
+          <table className="w-full text-sm">
+            <tbody>
+              <tr className="table-row"><td className="py-2">單身</td><td className="text-right num">{fmt(p.standardSingle)}</td></tr>
+              <tr className="table-row"><td className="py-2">夫妻合併申報</td><td className="text-right num">{fmt(p.standardCouple)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card mb-5">
+        <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>稅率級距 · TAX BRACKETS</div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+              <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>級距</th>
+              <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>稅率</th>
+              <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>累進差額</th>
+            </tr>
+          </thead>
+          <tbody>
+            {p.brackets.map((b, i) => {
+              const prev = i === 0 ? 0 : p.brackets[i - 1].upTo;
+              return (
+                <tr key={i} className="table-row">
+                  <td className="px-5 py-2 num">
+                    {prev === 0 ? `0` : fmt(prev + 1)} ~ {b.upTo === Infinity ? "以上" : fmt(b.upTo)}
+                  </td>
+                  <td className="px-3 py-2 text-center"><span className="chip chip-accent">{(b.rate * 100).toFixed(0)}%</span></td>
+                  <td className="px-5 py-2 text-right num">{fmt(b.deduct)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-cols-2 gap-5 mb-5">
+        <div className="card p-5">
+          <div className="ornament mb-3">特別扣除額 · SPECIAL DEDUCTIONS</div>
+          <table className="w-full text-sm">
+            <tbody>
+              <tr className="table-row"><td className="py-2">薪資 (每人)</td><td className="text-right num">{fmt(p.salaryDeduction)}</td></tr>
+              <tr className="table-row"><td className="py-2">儲蓄投資 (整戶)</td><td className="text-right num">{fmt(p.savingsDeduction)}</td></tr>
+              <tr className="table-row"><td className="py-2">身心障礙 (每人)</td><td className="text-right num">{fmt(p.disabilityDeduction)}</td></tr>
+              <tr className="table-row"><td className="py-2">教育學費 (每子女)</td><td className="text-right num">{fmt(p.educationDeduction)}</td></tr>
+              <tr className="table-row"><td className="py-2">幼兒學前 (第一胎)</td><td className="text-right num">{fmt(p.preschoolFirst)}</td></tr>
+              <tr className="table-row"><td className="py-2">幼兒學前 (第二胎以上)</td><td className="text-right num">{fmt(p.preschoolOther)}</td></tr>
+              <tr className="table-row"><td className="py-2">長期照顧 (每人)</td><td className="text-right num">{fmt(p.longTermCare)}</td></tr>
+              <tr className="table-row"><td className="py-2">房屋租金支出 (整戶,稅率20%以上不適用)</td><td className="text-right num">{fmt(p.rentDeduction)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="card p-5">
+          <div className="ornament mb-3">列舉扣除額上限 · ITEMIZED LIMITS</div>
+          <table className="w-full text-sm">
+            <tbody>
+              <tr className="table-row"><td className="py-2">人身保險費 (每人)</td><td className="text-right num">{fmt(p.insuranceLimit)}</td></tr>
+              <tr className="table-row"><td className="py-2">全民健保費</td><td className="text-right">不限額</td></tr>
+              <tr className="table-row"><td className="py-2">醫藥及生育費</td><td className="text-right">不限額</td></tr>
+              <tr className="table-row"><td className="py-2">災害損失</td><td className="text-right">不限額</td></tr>
+              <tr className="table-row"><td className="py-2">自用住宅購屋借款利息</td><td className="text-right num">{fmt(p.mortgageLimit)}</td></tr>
+              <tr className="table-row"><td className="py-2">捐贈 (一般)</td><td className="text-right">綜所 20%</td></tr>
+              <tr className="table-row"><td className="py-2">捐贈 (政府/國防/古蹟等)</td><td className="text-right">不限額</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card p-5 mb-5">
+        <div className="ornament mb-3">租賃所得計算 · RENTAL INCOME</div>
+        <div className="space-y-3 text-sm">
+          <div>
+            <span className="chip chip-amber mr-2">一般出租</span>
+            應稅租金所得 = 年租金總額 × (1 − 43%) [必要費用率]
+          </div>
+          <div>
+            <span className="chip chip-green mr-2">公益出租人 / 包租代管</span>
+            月租金 ≤ {fmt(p.publicLandlordExempt)} 免稅;超出部分必要費用率 60%
+            <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+              例: 月租 20,000 → 免稅 15,000,應稅部分 = (20,000-15,000) × 12 × (1-60%) = 24,000
+            </div>
+          </div>
+          <div>
+            <span className="chip chip-accent mr-2">免稅紀錄</span>
+            不計入應稅所得,僅作為內部現金流紀錄 (例:自住、無償提供親屬使用)
+          </div>
+        </div>
+      </div>
+
+      <div className="card p-5">
+        <div className="ornament mb-3">基本生活費 · BASIC LIVING EXPENSE</div>
+        <div className="text-sm" style={{ color: "var(--ink-soft)" }}>
+          每人 {fmt(p.basicLivingExp)} × 申報戶人數,若超過 (免稅額 + 一般扣除額 + 部分特扣) 合計,差額可再扣。<br/>
+          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>
+            比較基準包含: 免稅額、一般扣除額、儲蓄投資、身心障礙、教育學費、幼兒學前、長期照顧、房屋租金支出
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-6 p-4 rounded text-xs" style={{ background: "#fafaf6", color: "var(--ink-soft)", border: "1px solid var(--line)" }}>
+        ※ 本系統為自用試算工具,計算結果僅供參考,實際應納稅額以財政部國稅局核定為準。
+        部分特殊情況 (如:股利所得 28% 分開計稅、海外所得、所得基本稅額條例) 本系統暫未實作。
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 範例家庭資料
+// ============================================================
+const SAMPLE_FAMILY = (() => {
+  // 七人家庭: 父、母、長子(已婚)、媳婦、孫(幼兒)、次子(單身)、爺爺
+  const ids = Array.from({ length: 7 }, () => uid());
+  const propIds = Array.from({ length: 4 }, () => uid());
+  return {
+    members: [
+      { id: ids[0], name: "陳大年", relation: "self", age: 60, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "1234", note: "" },
+      { id: ids[1], name: "林秀英", relation: "spouse", age: 58, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "5678", note: "" },
+      { id: ids[2], name: "陳志明", relation: "child", age: 32, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "9012", note: "長子" },
+      { id: ids[3], name: "王美玲", relation: "other", age: 30, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "3456", note: "媳婦" },
+      { id: ids[4], name: "陳小寶", relation: "other", age: 3, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "7890", note: "孫子" },
+      { id: ids[5], name: "陳志強", relation: "child", age: 28, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "2468", note: "次子" },
+      { id: ids[6], name: "陳福伯", relation: "parent", age: 85, isDisabled: false, isStudent: false, needsLongTermCare: true, idNumber: "1111", note: "父親" },
+    ],
+    properties: [
+      { id: propIds[0], name: "中山北路套房", address: "台北市中山區", ownerId: ids[0], type: "general", monthlyRent: 25000, months: 12, expenseRatio: 0.43, note: "", taxFreeReason: "" },
+      { id: propIds[1], name: "新北板橋公寓", address: "新北市板橋區", ownerId: ids[0], type: "public", monthlyRent: 18000, months: 12, expenseRatio: 0.43, note: "公益出租人,租給政府指定戶", taxFreeReason: "" },
+      { id: propIds[2], name: "台中西區雅房", address: "台中市西區", ownerId: ids[2], type: "subletAgent", monthlyRent: 16000, months: 12, expenseRatio: 0.43, note: "委託崔媽媽包租代管", taxFreeReason: "" },
+      { id: propIds[3], name: "祖厝", address: "嘉義市", ownerId: ids[6], type: "taxFree", monthlyRent: 0, months: 0, note: "自住,留紀錄用", taxFreeReason: "自住,未出租" },
+    ],
+    filings: [
+      {
+        id: uid(), year: 114,
+        name: "114年 陳大年戶 (夫妻+小孫+老父)",
+        taxpayerId: ids[0], spouseId: ids[1],
+        dependentIds: [ids[6]], // 扶養老父
+        memberIncome: {
+          [ids[0]]: { salary: 1200000, interest: 50000, dividend: 80000, other: 0 },
+          [ids[1]]: { salary: 800000, interest: 20000, dividend: 30000, other: 0 },
+          [ids[6]]: { salary: 0, interest: 5000, dividend: 0, other: 0 },
+        },
+        itemizedDeductions: {
+          donationGeneral: 60000, donationUnlimited: 10000,
+          insurancePersonal: 72000, insuranceHealth: 45000,
+          medical: 35000, disaster: 0, mortgageInterest: 220000,
+        },
+        rentSupportPaid: 0, deductionChoice: "auto",
+      },
+      {
+        id: uid(), year: 114,
+        name: "114年 陳志明戶 (夫妻+幼兒)",
+        taxpayerId: ids[2], spouseId: ids[3],
+        dependentIds: [ids[4]],
+        memberIncome: {
+          [ids[2]]: { salary: 950000, interest: 8000, dividend: 12000, other: 0 },
+          [ids[3]]: { salary: 650000, interest: 3000, dividend: 0, other: 0 },
+        },
+        itemizedDeductions: {
+          donationGeneral: 5000, donationUnlimited: 0,
+          insurancePersonal: 48000, insuranceHealth: 38000,
+          medical: 12000, disaster: 0, mortgageInterest: 0,
+        },
+        rentSupportPaid: 180000, deductionChoice: "auto",
+      },
+      {
+        id: uid(), year: 114,
+        name: "114年 陳志強戶 (單身)",
+        taxpayerId: ids[5], spouseId: "",
+        dependentIds: [],
+        memberIncome: {
+          [ids[5]]: { salary: 720000, interest: 6000, dividend: 25000, other: 0 },
+        },
+        itemizedDeductions: {
+          donationGeneral: 3000, donationUnlimited: 0,
+          insurancePersonal: 24000, insuranceHealth: 25000,
+          medical: 8000, disaster: 0, mortgageInterest: 0,
+        },
+        rentSupportPaid: 144000, deductionChoice: "auto",
+      },
+      // 上一年度 113 紀錄
+      {
+        id: uid(), year: 113,
+        name: "113年 陳大年戶",
+        taxpayerId: ids[0], spouseId: ids[1],
+        dependentIds: [ids[6]],
+        memberIncome: {
+          [ids[0]]: { salary: 1150000, interest: 45000, dividend: 70000, other: 0 },
+          [ids[1]]: { salary: 760000, interest: 18000, dividend: 25000, other: 0 },
+          [ids[6]]: { salary: 0, interest: 4000, dividend: 0, other: 0 },
+        },
+        itemizedDeductions: {
+          donationGeneral: 50000, donationUnlimited: 5000,
+          insurancePersonal: 72000, insuranceHealth: 42000,
+          medical: 28000, disaster: 0, mortgageInterest: 240000,
+        },
+        rentSupportPaid: 0, deductionChoice: "auto",
+      },
+    ],
+    meta: { lastSavedAt: new Date().toISOString(), version: 1 },
+  };
+})();
+
+// ============================================================
+// 主 App
+// ============================================================
+function App() {
+  const [page, setPage] = useState("dashboard");
+  const [year, setYear] = useState(DEFAULT_YEAR);
+  const [data, setData] = useState(() => loadData());
+
+  useEffect(() => { saveData(data); }, [data]);
+
+  const props = { data, setData, year, setPage };
+
+  return (
+    <div className="flex min-h-screen">
+      <Sidebar current={page} onNav={setPage} year={year} onYearChange={setYear} data={data} />
+      <main className="flex-1 overflow-y-auto" style={{ background: "var(--bg)" }}>
+        <div className="p-8 max-w-[1400px] mx-auto">
+          {page === "dashboard" && <Dashboard {...props} />}
+          {page === "members" && <MembersPage {...props} />}
+          {page === "properties" && <PropertiesPage {...props} />}
+          {page === "filing" && <FilingPage {...props} />}
+          {page === "compare" && <ComparePage {...props} />}
+          {page === "history" && <HistoryPage {...props} />}
+          {page === "data" && <DataPage {...props} />}
+          {page === "help" && <HelpPage {...props} />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
