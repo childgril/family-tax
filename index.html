@@ -198,6 +198,94 @@ const DEFAULT_YEAR = 114;
 const AVAILABLE_YEARS = [114, 113, 112];
 
 // ============================================================
+// 親屬關係分類 (依所得稅法第 17 條)
+// ============================================================
+// isLinealAscendant: 直系尊親屬 (享有 70 歲免稅額優惠 145,500)
+// isChild: 子女 (享教育學費扣除 / 幼兒學前扣除)
+// isCollateral: 旁系 (兄弟姊妹等,扶養條件較嚴)
+// ============================================================
+const RELATIONS = {
+  self:        { label: "本人",       isLinealAscendant: false, isChild: false, isCollateral: false, canBeDependent: false, canBeSpouse: false },
+  spouse:      { label: "配偶",       isLinealAscendant: false, isChild: false, isCollateral: false, canBeDependent: false, canBeSpouse: true  },
+  child:       { label: "子女",       isLinealAscendant: false, isChild: true,  isCollateral: false, canBeDependent: true,  canBeSpouse: false },
+  grandchild:  { label: "孫子女",     isLinealAscendant: false, isChild: true,  isCollateral: false, canBeDependent: true,  canBeSpouse: false },
+  parent:      { label: "父母",       isLinealAscendant: true,  isChild: false, isCollateral: false, canBeDependent: true,  canBeSpouse: false },
+  grandparent: { label: "祖父母",     isLinealAscendant: true,  isChild: false, isCollateral: false, canBeDependent: true,  canBeSpouse: false },
+  parentInLaw: { label: "配偶父母",   isLinealAscendant: true,  isChild: false, isCollateral: false, canBeDependent: true,  canBeSpouse: false },
+  sibling:     { label: "兄弟姊妹",   isLinealAscendant: false, isChild: false, isCollateral: true,  canBeDependent: true,  canBeSpouse: false },
+  other:       { label: "其他親屬",   isLinealAscendant: false, isChild: false, isCollateral: true,  canBeDependent: true,  canBeSpouse: false },
+};
+
+// 判斷某成員是否能享 70 歲提高免稅額
+// 規定: 本人、配偶、直系尊親屬 (parent/grandparent/parentInLaw) 滿 70 歲適用
+function canUseElderExemption(member, role) {
+  if (!member || member.age === "" || Number(member.age) < 70) return false;
+  if (role === "taxpayer" || role === "spouse") return true;
+  const r = RELATIONS[member.relation];
+  return r && r.isLinealAscendant;
+}
+
+// 檢查申報戶合法性 (回傳警告訊息陣列)
+function validateFiling(filing, members) {
+  const warnings = [];
+  const taxpayer = members.find(m => m.id === filing.taxpayerId);
+  const spouse = filing.spouseId ? members.find(m => m.id === filing.spouseId) : null;
+  const dependents = (filing.dependentIds || []).map(id => members.find(m => m.id === id)).filter(Boolean);
+
+  if (!taxpayer) {
+    warnings.push({ level: "error", msg: "尚未指定主納稅義務人" });
+    return warnings;
+  }
+
+  // 配偶關係檢查
+  if (spouse) {
+    if (spouse.id === taxpayer.id) {
+      warnings.push({ level: "error", msg: "配偶不能與主納稅人是同一人" });
+    }
+    const sr = RELATIONS[spouse.relation];
+    if (sr && !sr.canBeSpouse && spouse.relation !== "self") {
+      warnings.push({ level: "warn", msg: `「${spouse.name}」關係標記為「${sr.label}」,不符合配偶身分,建議改成「配偶」` });
+    }
+  }
+
+  // 扶養親屬條件檢查
+  dependents.forEach(d => {
+    const r = RELATIONS[d.relation];
+    if (!r) return;
+    if (!r.canBeDependent) {
+      warnings.push({ level: "error", msg: `「${d.name}」(${r.label}) 不能列為扶養親屬` });
+      return;
+    }
+    if (d.id === taxpayer.id || d.id === filing.spouseId) {
+      warnings.push({ level: "error", msg: `「${d.name}」已是本人或配偶,不可重複列為扶養` });
+      return;
+    }
+    const age = Number(d.age);
+
+    // 子女、孫子女、兄弟姊妹: 未成年 OR 成年但在學/身障/無謀生能力
+    if (r.isChild || d.relation === "sibling") {
+      if (age >= 20 && !d.isStudent && !d.isDisabled && !d.cannotSupportSelf) {
+        warnings.push({ level: "warn", msg: `「${d.name}」(${r.label}) 已成年,需「在學」、「身心障礙」或「無謀生能力」才可列為扶養` });
+      }
+    }
+
+    // 直系尊親屬: 60 歲以上 OR 無謀生能力
+    if (r.isLinealAscendant) {
+      if (age < 60 && !d.cannotSupportSelf && !d.isDisabled) {
+        warnings.push({ level: "warn", msg: `「${d.name}」(${r.label}) 未滿 60 歲,需「無謀生能力」或「身心障礙」才可列為扶養` });
+      }
+    }
+
+    // 其他親屬: 必須勾選共同居住
+    if (d.relation === "other" && !d.coResident) {
+      warnings.push({ level: "info", msg: `「${d.name}」(其他親屬) 須與納稅人共同居住且確受扶養,請確認並在成員資料勾選「共同居住」` });
+    }
+  });
+
+  return warnings;
+}
+
+// ============================================================
 // 工具函式
 // ============================================================
 const fmt = (n) => {
@@ -317,18 +405,30 @@ function computeTaxForFiling(filing, members, year) {
     rentalTaxable += r.taxable;
     rentalDetail.push({ memberId: m.id, ...r });
 
+    // 判斷身分標記用的「角色」
+    let role = "dependent";
+    if (m.id === filing.taxpayerId) role = "taxpayer";
+    else if (m.id === filing.spouseId) role = "spouse";
+
     if (m.isDisabled) disabilityCount++;
     if (m.age >= 70) elderCount++;
-    if (m.isStudent) studentCount++;
-    if (m.age !== undefined && m.age < 6) preschoolCount++;
+    // 教育學費: 限子女、孫子女 (財政部解釋以子女為限,孫子女實務上認可)
+    const rel = RELATIONS[m.relation];
+    if (m.isStudent && rel && rel.isChild) studentCount++;
+    // 幼兒學前: 限子女、孫子女且 < 6 歲
+    if (m.age !== undefined && m.age !== "" && Number(m.age) < 6 && rel && rel.isChild) preschoolCount++;
     if (m.needsLongTermCare) longTermCareCount++;
   });
 
   const grossIncome = salaryGross + interest + dividend + rentalTaxable + otherIncome;
 
-  // === 2. 免稅額 ===
+  // === 2. 免稅額 (按關係判定) ===
+  // 規定: 本人、配偶、直系尊親屬 70 歲以上適用 145,500;其他親屬即使 70 歲仍用 97,000
   const exemption = filers.reduce((sum, m) => {
-    return sum + (m.age >= 70 ? params.exemptionElder : params.exemption);
+    let role = "dependent";
+    if (m.id === filing.taxpayerId) role = "taxpayer";
+    else if (m.id === filing.spouseId) role = "spouse";
+    return sum + (canUseElderExemption(m, role) ? params.exemptionElder : params.exemption);
   }, 0);
 
   // === 3. 一般扣除額: 標準 vs 列舉 ===
@@ -360,7 +460,12 @@ function computeTaxForFiling(filing, members, year) {
   const generalDeduction = useItemized ? itemizedTotal : standardDeduction;
 
   // === 4. 特別扣除額 ===
-  const savings = Math.min(interest, params.savingsDeduction);
+  // 儲蓄投資扣除額: 預設 = min(全戶利息, 270,000)
+  // 但若使用者勾選「手動覆寫」(例如部分利息為公債/公司債不適用),則用使用者填的金額
+  const savingsAuto = Math.min(interest, params.savingsDeduction);
+  const savings = filing.savingsOverride
+    ? Math.min(Math.max(0, toNum(filing.savingsOverrideAmount)), params.savingsDeduction)
+    : savingsAuto;
   const disabilityDed = disabilityCount * params.disabilityDeduction;
   const educationDed = Math.min(studentCount, filers.length) * params.educationDeduction;
   // 幼兒學前: 第一名定額,第二名以上提高 (依 114 年制度)
@@ -415,18 +520,57 @@ function computeTaxForFiling(filing, members, year) {
   const netIncome = Math.max(0, grossIncome - exemption - generalDeductionActual - specialTotal - blDiff);
   const taxResult = applyBrackets(netIncome, params);
 
+  // === 7.5 股利可抵減稅額 ===
+  // 規則 (所得稅法第 15 條第 4 項):
+  //   合併計稅: 股利全額併入綜所,但可用「股利 × 8.5%」抵減稅額,每戶上限 80,000
+  //   分開計稅: 股利不併入綜所,單獨用 28% 課稅 (適用高所得者,本系統暫不支援自動切換)
+  // 預設採用「合併計稅,享 8.5% 抵減」
+  const dividendChoice = filing.dividendChoice || "combine"; // combine | separate
+  let dividendCredit = 0;
+  let dividendSeparateTax = 0;
+  if (dividendChoice === "combine") {
+    dividendCredit = Math.min(Math.round(dividend * 0.085), 80000);
+  } else if (dividendChoice === "separate") {
+    // 分開計稅: 股利不併入 (但目前 grossIncome 已含股利,要回退)
+    // 簡化: dividend 已在 grossIncome 內,分開算需從 netIncome 減去股利再算稅,加上股利*28%
+    // 但這牽涉到誰算淨額誰算分離,複雜度高,先以最簡化處理
+    dividendSeparateTax = Math.round(dividend * 0.28);
+  }
+
+  // === 7.6 已扣繳稅額 / 重購自用住宅退稅 / 其他可扣抵 ===
+  const taxCredits = filing.taxCredits || {};
+  const prepaidTax = toNum(taxCredits.prepaidTax);            // 已預扣繳稅額 (薪資、利息、租賃...)
+  const repurchaseCredit = toNum(taxCredits.repurchaseCredit);// 重購自用住宅退稅
+  const otherCredit = toNum(taxCredits.otherCredit);          // 其他抵減 (含投資抵減、自用住宅買賣退稅等)
+
+  // === 7.7 應自繳稅額計算 ===
+  // 法定步驟:
+  //   (1) 綜所稅 = 淨額 × 稅率 − 累進差額
+  //   (2) 減「投資抵減 / 大陸地區所得已納稅額 / 重購退稅 / 股利抵減」(但股利抵減上限 8 萬)
+  //   (3) 減「已預扣繳稅額」= 應自繳/退稅
+  const totalCreditsBeforePrepaid = dividendCredit + repurchaseCredit + otherCredit;
+  const taxAfterCredits = Math.max(0, taxResult.tax + dividendSeparateTax - totalCreditsBeforePrepaid);
+  const finalDue = taxAfterCredits - prepaidTax; // 正數 = 應補繳;負數 = 可退稅
+
   // === 8. 標準 vs 列舉比較 (給使用者參考) ===
   const altDeduction = useItemized ? standardDeduction : itemizedTotalActual;
   const altGeneral = altDeduction;
   const altNet = Math.max(0, grossIncome - exemption - altGeneral - specialTotal - blDiff);
-  const altTax = applyBrackets(altNet, params).tax;
-  const saving = altTax - taxResult.tax; // 若 > 0 表示目前選擇省了多少
+  const altTaxRaw = applyBrackets(altNet, params).tax;
+  // alt 也要扣抵
+  const altTaxAfterCredits = Math.max(0, altTaxRaw + dividendSeparateTax - totalCreditsBeforePrepaid);
+  const altTax = altTaxAfterCredits - prepaidTax;
+  const saving = altTax - finalDue; // 比較最終實繳
+
+  // 申報戶合法性檢查
+  const warnings = validateFiling(filing, members);
 
   return {
     year,
     params,
     filers,
     hasSpouse,
+    warnings,
     // 所得
     salaryGross, interest, dividend, rentalTaxable, otherIncome, grossIncome,
     rentalDetail,
@@ -444,7 +588,7 @@ function computeTaxForFiling(filing, members, year) {
       mortgageInterest: actualMortgage,
     },
     // 特扣
-    salarySD, savings, disabilityDed, educationDed, preschoolDed, longTermCareDed, rentDeductActual,
+    salarySD, savings, savingsAuto, disabilityDed, educationDed, preschoolDed, longTermCareDed, rentDeductActual,
     specialTotal,
     // 基本生活費
     blTotal, blcompare, blDiff,
@@ -453,6 +597,16 @@ function computeTaxForFiling(filing, members, year) {
     taxRate: taxResult.rate,
     taxDeductValue: taxResult.deduct,
     tax: taxResult.tax,
+    // 抵減
+    dividendChoice,
+    dividendCredit,
+    dividendSeparateTax,
+    repurchaseCredit,
+    otherCredit,
+    totalCreditsBeforePrepaid,
+    taxAfterCredits,
+    prepaidTax,
+    finalDue, // 正數 = 補繳;負數 = 退稅
     // 比較
     altDeduction: useItemized ? "standard" : "itemized",
     altTax,
@@ -718,7 +872,12 @@ function Dashboard({ data, year, setPage }) {
 // ============================================================
 function MembersPage({ data, setData }) {
   const [editing, setEditing] = useState(null);
-  const blank = { id: "", name: "", relation: "self", age: "", isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "", note: "" };
+  const blank = {
+    id: "", name: "", relation: "self", age: "",
+    isDisabled: false, isStudent: false, needsLongTermCare: false,
+    cannotSupportSelf: false, coResident: false,
+    idNumber: "", note: ""
+  };
 
   const save = (m) => {
     let next;
@@ -736,17 +895,12 @@ function MembersPage({ data, setData }) {
     setData({ ...data, members: data.members.filter(m => m.id !== id) });
   };
 
-  const RELATIONS = {
-    self: "本人", spouse: "配偶", child: "子女", parent: "父母", grandparent: "祖父母",
-    sibling: "兄弟姊妹", other: "其他親屬"
-  };
-
   return (
     <div className="fade-in">
       <PageHeader
         ornament="§ FAMILY MEMBERS · 家庭成員"
         title="成員名冊"
-        subtitle="管理所有家族成員的基本資料,作為申報戶的依據"
+        subtitle="關係會影響扣除額與扶養條件,請正確設定"
         right={<button className="btn-primary text-sm" onClick={() => setEditing({ ...blank })}>+ 新增成員</button>}
       />
 
@@ -774,7 +928,7 @@ function MembersPage({ data, setData }) {
                 <tr key={m.id} className="table-row">
                   <td className="px-5 py-3 font-medium">{m.name}</td>
                   <td className="px-3 py-3 num text-xs" style={{ color: "var(--ink-mute)" }}>{m.idNumber || "—"}</td>
-                  <td className="px-3 py-3"><span className="chip">{RELATIONS[m.relation] || m.relation}</span></td>
+                  <td className="px-3 py-3"><span className="chip">{(RELATIONS[m.relation] || {}).label || m.relation}</span></td>
                   <td className="px-3 py-3 text-center num">{m.age || "—"}</td>
                   <td className="px-3 py-3 space-x-1">
                     {m.isDisabled && <span className="chip chip-amber">身心障礙</span>}
@@ -799,18 +953,38 @@ function MembersPage({ data, setData }) {
           member={editing}
           onSave={save}
           onClose={() => setEditing(null)}
-          relations={RELATIONS}
         />
       )}
     </div>
   );
 }
 
-function MemberModal({ member, onSave, onClose, relations }) {
+function MemberModal({ member, onSave, onClose }) {
   const [m, setM] = useState({ ...member });
+  const currentRel = RELATIONS[m.relation];
+
+  // 給每個關係的扶養條件提示
+  const relHint = (() => {
+    if (!currentRel || m.relation === "self" || m.relation === "spouse") return null;
+    const age = Number(m.age);
+    if (currentRel.isLinealAscendant) {
+      return `直系尊親屬:60 歲以上 OR 無謀生能力可列扶養;滿 70 歲可用提高免稅額 145,500`;
+    }
+    if (currentRel.isChild) {
+      return `子女/孫子女:未成年 OR 成年但在學/身障/無謀生能力可列扶養;在學可扣教育學費,未滿 6 歲可扣幼兒學前`;
+    }
+    if (m.relation === "sibling") {
+      return `兄弟姊妹:未成年 OR 成年但在學/身障/無謀生能力可列扶養 (但不適用教育學費扣除額)`;
+    }
+    if (m.relation === "other") {
+      return `其他親屬:需與納稅人「共同居住」且確受扶養 (民法第1114條第4款)`;
+    }
+    return null;
+  })();
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(26,29,35,0.4)" }} onClick={onClose}>
-      <div className="card w-[480px] p-6" onClick={e => e.stopPropagation()}>
+      <div className="card w-[520px] max-h-[90vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
         <div className="ornament mb-2">{m.id ? "EDIT MEMBER" : "NEW MEMBER"}</div>
         <h2 className="font-serif text-xl mb-4">{m.id ? "編輯成員" : "新增成員"}</h2>
 
@@ -822,22 +996,35 @@ function MemberModal({ member, onSave, onClose, relations }) {
             <input className="input-text w-full" value={m.idNumber} maxLength={4} onChange={e => setM({...m, idNumber: e.target.value})} />
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="關係">
+            <Field label="關係 (影響稅務計算!)">
               <select className="input-text-plain w-full" value={m.relation} onChange={e => setM({...m, relation: e.target.value})}>
-                {Object.entries(relations).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                {Object.entries(RELATIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
               </select>
             </Field>
             <Field label="年齡">
               <input type="number" className="input-text w-full" value={m.age} onChange={e => setM({...m, age: e.target.value === "" ? "" : Number(e.target.value)})} />
             </Field>
           </div>
+          {relHint && (
+            <div className="text-xs p-2 rounded" style={{ background: "#fafaf6", color: "var(--ink-soft)", border: "1px solid var(--line)" }}>
+              ⓘ {relHint}
+            </div>
+          )}
           <Field label="備註">
             <input className="input-text-plain w-full" value={m.note} onChange={e => setM({...m, note: e.target.value})} />
           </Field>
-          <div className="grid grid-cols-2 gap-2 pt-2">
-            <Toggle label="身心障礙" value={m.isDisabled} onChange={v => setM({...m, isDisabled: v})} hint="可扣 218,000" />
-            <Toggle label="在學中" value={m.isStudent} onChange={v => setM({...m, isStudent: v})} hint="教育學費扣除" />
-            <Toggle label="需長期照顧" value={m.needsLongTermCare} onChange={v => setM({...m, needsLongTermCare: v})} hint="長照扣除 120,000" />
+
+          <div className="pt-2">
+            <div className="text-xs mb-2 ornament">SPECIAL STATUS · 特殊身分</div>
+            <div className="grid grid-cols-2 gap-2">
+              <Toggle label="身心障礙" value={m.isDisabled} onChange={v => setM({...m, isDisabled: v})} hint="特扣 218,000" />
+              <Toggle label="在學中" value={m.isStudent} onChange={v => setM({...m, isStudent: v})} hint="子女/孫子女才適用教育學費扣除" />
+              <Toggle label="需長期照顧" value={m.needsLongTermCare} onChange={v => setM({...m, needsLongTermCare: v})} hint="特扣 120,000" />
+              <Toggle label="無謀生能力" value={m.cannotSupportSelf} onChange={v => setM({...m, cannotSupportSelf: v})} hint="作為扶養條件" />
+              {m.relation === "other" && (
+                <Toggle label="與納稅人共同居住" value={m.coResident} onChange={v => setM({...m, coResident: v})} hint="其他親屬扶養必要條件" />
+              )}
+            </div>
           </div>
         </div>
 
@@ -1132,6 +1319,14 @@ function FilingPage({ data, setData, year, setPage }) {
       },
       rentSupportPaid: 0,
       deductionChoice: "auto", // auto / standard / itemized
+      savingsOverride: false,
+      savingsOverrideAmount: 0,
+      dividendChoice: "combine", // combine (8.5%抵減) / separate (28%分開)
+      taxCredits: {
+        prepaidTax: 0,
+        repurchaseCredit: 0,
+        otherCredit: 0,
+      },
     };
     setData({ ...data, filings: [...data.filings, newFiling] });
     setSelectedId(newFiling.id);
@@ -1284,14 +1479,23 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
             <select className="input-text-plain w-full" value={filing.taxpayerId}
               onChange={e => onChange({ ...filing, taxpayerId: e.target.value })}>
               <option value="">— 請選擇 —</option>
-              {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {members.map(m => {
+                const r = RELATIONS[m.relation];
+                return <option key={m.id} value={m.id}>{m.name} ({r?.label || m.relation})</option>;
+              })}
             </select>
           </Field>
           <Field label="配偶 (合併申報)">
             <select className="input-text-plain w-full" value={filing.spouseId || ""}
               onChange={e => onChange({ ...filing, spouseId: e.target.value })}>
               <option value="">無 (單身申報)</option>
-              {members.filter(m => m.id !== filing.taxpayerId).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {members.filter(m => m.id !== filing.taxpayerId).map(m => {
+                const r = RELATIONS[m.relation];
+                const isCandidate = r && r.canBeSpouse;
+                return <option key={m.id} value={m.id}>
+                  {isCandidate ? "★ " : ""}{m.name} ({r?.label || m.relation})
+                </option>;
+              })}
             </select>
           </Field>
           <Field label="扶養親屬數">
@@ -1301,21 +1505,55 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
 
         {/* 扶養親屬勾選 */}
         <div className="mt-3">
-          <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>勾選扶養親屬:</div>
+          <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>勾選扶養親屬 (圓點顯示稅法限制):</div>
           <div className="flex flex-wrap gap-2">
             {members.filter(m => m.id !== filing.taxpayerId && m.id !== filing.spouseId).map(m => {
               const checked = (filing.dependentIds || []).includes(m.id);
+              const r = RELATIONS[m.relation];
+              const age = Number(m.age);
+              // 判斷此人能否合法扶養
+              let okHint = "✓";
+              let okColor = "var(--green)";
+              if (!r || !r.canBeDependent) { okHint = "✗"; okColor = "var(--red)"; }
+              else if ((r.isChild || m.relation === "sibling") && age >= 20 && !m.isStudent && !m.isDisabled && !m.cannotSupportSelf) {
+                okHint = "△"; okColor = "var(--gold)";
+              } else if (r.isLinealAscendant && age < 60 && !m.cannotSupportSelf && !m.isDisabled) {
+                okHint = "△"; okColor = "var(--gold)";
+              } else if (m.relation === "other" && !m.coResident) {
+                okHint = "△"; okColor = "var(--gold)";
+              }
               return (
                 <label key={m.id} className={`px-3 py-1.5 rounded cursor-pointer text-sm flex items-center gap-2 border`}
                   style={{ borderColor: checked ? "var(--accent)" : "var(--line)", background: checked ? "var(--accent-soft)" : "white" }}>
                   <input type="checkbox" checked={checked} onChange={() => toggleDependent(m.id)} />
-                  {m.name}
+                  <span style={{ color: okColor, fontWeight: 700 }}>{okHint}</span>
+                  {m.name} <span className="text-xs" style={{ color: "var(--ink-mute)" }}>({r?.label})</span>
                 </label>
               );
             })}
           </div>
         </div>
       </div>
+
+      {/* 警告 / 提示面板 */}
+      {result.warnings && result.warnings.length > 0 && (
+        <div className="card p-4" style={{ background: "#fdfaf3", borderColor: "var(--gold)" }}>
+          <div className="ornament mb-2" style={{ color: "#6b5418" }}>⚠ VALIDATION · 申報戶檢查</div>
+          <div className="space-y-1.5 text-sm">
+            {result.warnings.map((w, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span style={{
+                  color: w.level === "error" ? "var(--red)" : (w.level === "warn" ? "var(--gold)" : "var(--ink-mute)"),
+                  fontWeight: 700, minWidth: "1.5em"
+                }}>
+                  {w.level === "error" ? "✗" : (w.level === "warn" ? "⚠" : "ⓘ")}
+                </span>
+                <span style={{ color: "var(--ink-soft)" }}>{w.msg}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 各成員所得輸入 */}
       <div className="card">
@@ -1382,6 +1620,50 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
               </tr>
             </tfoot>
           </table>
+
+          {/* 儲蓄投資特別扣除額提示 */}
+          <div className="mt-4 p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <div className="text-xs font-medium mb-1" style={{ color: "var(--ink-soft)" }}>
+                  ⓘ 儲蓄投資特別扣除額 (從利息自動計算)
+                </div>
+                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                  系統自動套用 = min(全戶利息, {fmt(params.savingsDeduction)})。
+                  <br />
+                  ⚠ 若你的利息包含郵局存簿、公債、公司債、金融債券、短期票券等<b>不適用</b>項目,請勾選下方覆寫。
+                </div>
+                {filing.savingsOverride ? (
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-xs">手動指定金額:</span>
+                    <input type="number" className="input-text w-32 text-right"
+                      value={filing.savingsOverrideAmount || 0}
+                      onChange={e => onChange({ ...filing, savingsOverrideAmount: Number(e.target.value) || 0 })} />
+                    <span className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                      上限 {fmt(params.savingsDeduction)}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+              <div className="text-right">
+                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>實際採用</div>
+                <div className="font-serif text-2xl num" style={{ color: "var(--accent-deep)" }}>
+                  {fmt(result.savings)}
+                </div>
+                {filing.savingsOverride && result.savings !== result.savingsAuto && (
+                  <div className="text-xs" style={{ color: "var(--gold)" }}>
+                    (覆寫,自動值 {fmt(result.savingsAuto)})
+                  </div>
+                )}
+              </div>
+            </div>
+            <label className="flex items-center gap-2 mt-3 cursor-pointer text-xs">
+              <input type="checkbox"
+                checked={!!filing.savingsOverride}
+                onChange={e => onChange({ ...filing, savingsOverride: e.target.checked })} />
+              <span>手動覆寫儲蓄投資扣除額 (排除不適用利息)</span>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -1469,6 +1751,78 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
         </div>
       </div>
 
+      {/* ③ 抵減與已扣繳 */}
+      <div className="card">
+        <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
+          ③ CREDITS · 稅額抵減與已扣繳
+        </div>
+        <div className="p-5 space-y-4">
+          {/* 股利課稅方式 */}
+          <div>
+            <div className="text-xs font-medium mb-2" style={{ color: "var(--ink-soft)" }}>股利所得課稅方式 (二擇一)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className={`p-3 rounded cursor-pointer border ${(filing.dividendChoice || "combine") === "combine" ? "border-2" : ""}`}
+                style={{ borderColor: (filing.dividendChoice || "combine") === "combine" ? "var(--accent)" : "var(--line)", background: (filing.dividendChoice || "combine") === "combine" ? "#fafaf6" : "white" }}>
+                <input type="radio" name="divChoice" value="combine"
+                  checked={(filing.dividendChoice || "combine") === "combine"}
+                  onChange={() => onChange({ ...filing, dividendChoice: "combine" })} className="mr-2"/>
+                <span className="text-sm font-medium">合併計稅,可抵減</span>
+                <div className="text-xs mt-1 ml-5" style={{ color: "var(--ink-mute)" }}>
+                  股利併入綜所;可用「股利 × 8.5%」抵減稅額,上限 80,000 / 戶
+                </div>
+                <div className="text-xs ml-5 mt-1 num" style={{ color: "var(--accent-deep)" }}>
+                  本戶可抵減: {fmt(Math.min(Math.round(result.dividend * 0.085), 80000))}
+                </div>
+              </label>
+              <label className={`p-3 rounded cursor-pointer border ${filing.dividendChoice === "separate" ? "border-2" : ""}`}
+                style={{ borderColor: filing.dividendChoice === "separate" ? "var(--accent)" : "var(--line)", background: filing.dividendChoice === "separate" ? "#fafaf6" : "white" }}>
+                <input type="radio" name="divChoice" value="separate"
+                  checked={filing.dividendChoice === "separate"}
+                  onChange={() => onChange({ ...filing, dividendChoice: "separate" })} className="mr-2"/>
+                <span className="text-sm font-medium">分開計稅 28%</span>
+                <div className="text-xs mt-1 ml-5" style={{ color: "var(--ink-mute)" }}>
+                  股利單獨用 28% 課稅 (適用高所得者,稅率 30%+ 時)
+                </div>
+                <div className="text-xs ml-5 mt-1 num" style={{ color: "var(--ink-mute)" }}>
+                  分離稅額: {fmt(Math.round(result.dividend * 0.28))}
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* 其他抵減 */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>已預扣繳稅額</label>
+              <input type="number" className="input-text w-full text-right"
+                value={filing.taxCredits?.prepaidTax || ""}
+                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, prepaidTax: Number(e.target.value) || 0 } })} />
+              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+                薪資/利息/租賃等扣繳憑單上的「扣繳稅額」合計
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>重購自用住宅退稅</label>
+              <input type="number" className="input-text w-full text-right"
+                value={filing.taxCredits?.repurchaseCredit || ""}
+                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, repurchaseCredit: Number(e.target.value) || 0 } })} />
+              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+                2 年內重購自宅可申請的退稅
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>其他扣抵</label>
+              <input type="number" className="input-text w-full text-right"
+                value={filing.taxCredits?.otherCredit || ""}
+                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, otherCredit: Number(e.target.value) || 0 } })} />
+              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+                投資抵減、大陸地區已納稅額等
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* 試算結果 */}
       <ResultPanel result={result} year={year} />
 
@@ -1476,7 +1830,7 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
       {householdProperties.length > 0 && (
         <div className="card">
           <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
-            ③ RENTAL PROPERTIES IN HOUSEHOLD · 本戶租賃所得明細
+            ⑤ RENTAL PROPERTIES IN HOUSEHOLD · 本戶租賃所得明細
           </div>
           <table className="w-full text-sm">
             <thead style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
@@ -1541,7 +1895,7 @@ function ResultPanel({ result, year }) {
             <Row label="− 免稅額" v={-result.exemption} muted />
             <Row label={`− 一般扣除額 (${result.useItemized ? "列舉" : "標準"})`} v={-result.generalDeduction} muted />
             <Row label="− 薪資特扣" v={-result.salarySD} muted />
-            <Row label="− 儲蓄投資特扣" v={-result.savings} muted />
+            <Row label={`− 儲蓄投資特扣${result.savings !== result.savingsAuto ? " (手動)" : ""}`} v={-result.savings} muted />
             {result.disabilityDed > 0 && <Row label="− 身心障礙特扣" v={-result.disabilityDed} muted />}
             {result.educationDed > 0 && <Row label="− 教育學費特扣" v={-result.educationDed} muted />}
             {result.preschoolDed > 0 && <Row label="− 幼兒學前特扣" v={-result.preschoolDed} muted />}
@@ -1551,16 +1905,54 @@ function ResultPanel({ result, year }) {
             <Row label="綜合所得淨額" v={result.netIncome} bold border />
             <Row label={`適用稅率 ${(result.taxRate * 100).toFixed(0)}%`} v={Math.round(result.netIncome * result.taxRate)} muted />
             <Row label="− 累進差額" v={-result.taxDeductValue} muted />
+            <Row label="綜合所得稅額" v={result.tax} bold border />
+            {result.dividendSeparateTax > 0 && <Row label={`+ 股利分開計稅 28%`} v={result.dividendSeparateTax} muted />}
+            {result.dividendCredit > 0 && <Row label="− 股利可抵減稅額 (8.5%)" v={-result.dividendCredit} muted />}
+            {result.repurchaseCredit > 0 && <Row label="− 重購自用住宅退稅" v={-result.repurchaseCredit} muted />}
+            {result.otherCredit > 0 && <Row label="− 其他抵減稅額" v={-result.otherCredit} muted />}
+            {(result.dividendCredit > 0 || result.repurchaseCredit > 0 || result.otherCredit > 0 || result.dividendSeparateTax > 0) &&
+              <Row label="抵減後稅額" v={result.taxAfterCredits} bold border />}
+            {result.prepaidTax > 0 && <Row label="− 已預扣繳稅額" v={-result.prepaidTax} muted />}
           </div>
 
           {/* 主數字 */}
           <div className="flex flex-col justify-between">
             <div>
-              <div className="text-center p-6 rounded mb-4" style={{ background: "var(--ink)", color: "white" }}>
-                <div className="ornament" style={{ color: "#a8a293" }}>YEAR {year} TAX PAYABLE</div>
-                <div className="font-serif text-5xl num mt-2">{fmt(result.tax)}</div>
-                <div className="text-xs mt-2" style={{ color: "#a8a293" }}>應納稅額 (新臺幣 元)</div>
+              <div className="text-center p-6 rounded mb-4" style={{
+                background: result.finalDue >= 0 ? "var(--ink)" : "var(--green)",
+                color: "white"
+              }}>
+                <div className="ornament" style={{ color: "#a8a293" }}>
+                  YEAR {year} {result.finalDue >= 0 ? "TAX TO PAY" : "TAX REFUND"}
+                </div>
+                <div className="font-serif text-5xl num mt-2">{fmt(Math.abs(result.finalDue))}</div>
+                <div className="text-xs mt-2" style={{ color: "#a8a293" }}>
+                  {result.finalDue >= 0 ? "應補繳稅額" : "可退稅"} (新臺幣 元)
+                </div>
               </div>
+
+              {/* 稅額構成展開 */}
+              <div className="p-3 rounded mb-3" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                <div className="ornament mb-2">TAX BREAKDOWN · 稅額構成</div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between"><span>綜所稅額</span><span className="num">{fmt(result.tax)}</span></div>
+                  {result.totalCreditsBeforePrepaid > 0 && (
+                    <div className="flex justify-between" style={{ color: "var(--green)" }}>
+                      <span>− 抵減合計</span><span className="num">{fmt(result.totalCreditsBeforePrepaid)}</span>
+                    </div>
+                  )}
+                  {result.prepaidTax > 0 && (
+                    <div className="flex justify-between" style={{ color: "var(--green)" }}>
+                      <span>− 已預扣繳</span><span className="num">{fmt(result.prepaidTax)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-t pt-1 mt-1 font-medium" style={{ borderColor: "var(--line)" }}>
+                    <span>{result.finalDue >= 0 ? "應補繳" : "應退稅"}</span>
+                    <span className="num">{fmt(Math.abs(result.finalDue))}</span>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 rounded text-center" style={{ background: "white", border: "1px solid var(--line)" }}>
                   <div className="text-xs" style={{ color: "var(--ink-mute)" }}>實際稅率</div>
@@ -2007,6 +2399,33 @@ function HelpPage({ year }) {
         </div>
       </div>
 
+      <div className="card p-5 mb-5">
+        <div className="ornament mb-3">關係如何影響稅務 · RELATION RULES</div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+              <th className="text-left py-2 px-3 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>關係</th>
+              <th className="text-center py-2 px-3 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>70歲提高免稅</th>
+              <th className="text-center py-2 px-3 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>教育學費</th>
+              <th className="text-center py-2 px-3 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>幼兒學前</th>
+              <th className="text-left py-2 px-3 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>扶養條件</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="table-row"><td className="py-2 px-3">本人 / 配偶</td><td className="text-center">✓</td><td className="text-center">—</td><td className="text-center">—</td><td className="px-3 text-xs">合併申報</td></tr>
+            <tr className="table-row"><td className="py-2 px-3">子女</td><td className="text-center">✗</td><td className="text-center">✓ 在學可扣 25,000</td><td className="text-center">✓ &lt;6歲</td><td className="px-3 text-xs">未成年 OR 在學 / 身障 / 無謀生能力</td></tr>
+            <tr className="table-row"><td className="py-2 px-3">孫子女</td><td className="text-center">✗</td><td className="text-center">✓ 在學可扣 25,000</td><td className="text-center">✓ &lt;6歲</td><td className="px-3 text-xs">同子女</td></tr>
+            <tr className="table-row"><td className="py-2 px-3">父母 / 祖父母 / 配偶父母</td><td className="text-center" style={{ color: "var(--green)" }}>✓ 145,500</td><td className="text-center">✗</td><td className="text-center">✗</td><td className="px-3 text-xs">60 歲以上 OR 無謀生能力</td></tr>
+            <tr className="table-row"><td className="py-2 px-3">兄弟姊妹</td><td className="text-center">✗</td><td className="text-center">✗</td><td className="text-center">✗</td><td className="px-3 text-xs">未成年 OR 在學 / 身障 / 無謀生能力</td></tr>
+            <tr className="table-row"><td className="py-2 px-3">其他親屬</td><td className="text-center">✗</td><td className="text-center">✗</td><td className="text-center">✗</td><td className="px-3 text-xs">須共同居住且受扶養</td></tr>
+          </tbody>
+        </table>
+        <div className="text-xs mt-3" style={{ color: "var(--ink-mute)" }}>
+          ※ 70 歲提高免稅額(145,500)只限本人、配偶、直系尊親屬。旁系如伯叔姑舅滿70歲仍只能用 97,000。<br/>
+          ※ 教育學費扣除僅限子女(財政部解釋實務上孫子女可,兄弟姊妹不可)。
+        </div>
+      </div>
+
       <div className="mt-6 p-4 rounded text-xs" style={{ background: "#fafaf6", color: "var(--ink-soft)", border: "1px solid var(--line)" }}>
         ※ 本系統為自用試算工具,計算結果僅供參考,實際應納稅額以財政部國稅局核定為準。
         部分特殊情況 (如:股利所得 28% 分開計稅、海外所得、所得基本稅額條例) 本系統暫未實作。
@@ -2024,13 +2443,13 @@ const SAMPLE_FAMILY = (() => {
   const propIds = Array.from({ length: 4 }, () => uid());
   return {
     members: [
-      { id: ids[0], name: "陳大年", relation: "self", age: 60, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "1234", note: "" },
-      { id: ids[1], name: "林秀英", relation: "spouse", age: 58, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "5678", note: "" },
-      { id: ids[2], name: "陳志明", relation: "child", age: 32, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "9012", note: "長子" },
-      { id: ids[3], name: "王美玲", relation: "other", age: 30, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "3456", note: "媳婦" },
-      { id: ids[4], name: "陳小寶", relation: "other", age: 3, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "7890", note: "孫子" },
-      { id: ids[5], name: "陳志強", relation: "child", age: 28, isDisabled: false, isStudent: false, needsLongTermCare: false, idNumber: "2468", note: "次子" },
-      { id: ids[6], name: "陳福伯", relation: "parent", age: 85, isDisabled: false, isStudent: false, needsLongTermCare: true, idNumber: "1111", note: "父親" },
+      { id: ids[0], name: "陳大年", relation: "self",        age: 60, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "1234", note: "" },
+      { id: ids[1], name: "林秀英", relation: "spouse",      age: 58, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "5678", note: "" },
+      { id: ids[2], name: "陳志明", relation: "child",       age: 32, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "9012", note: "長子" },
+      { id: ids[3], name: "王美玲", relation: "spouse",      age: 30, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "3456", note: "媳婦 (志明配偶)" },
+      { id: ids[4], name: "陳小寶", relation: "grandchild",  age: 3,  isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: true,  idNumber: "7890", note: "孫子" },
+      { id: ids[5], name: "陳志強", relation: "child",       age: 28, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "2468", note: "次子 (單身)" },
+      { id: ids[6], name: "陳福伯", relation: "parent",      age: 85, isDisabled: false, isStudent: false, needsLongTermCare: true,  cannotSupportSelf: false, coResident: false, idNumber: "1111", note: "父親 (直系尊親屬,70歲以上免稅額提高)" },
     ],
     properties: [
       { id: propIds[0], name: "中山北路套房", address: "台北市中山區", ownerId: ids[0], type: "general", monthlyRent: 25000, months: 12, expenseRatio: 0.43, note: "", taxFreeReason: "" },
