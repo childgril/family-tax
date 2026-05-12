@@ -728,6 +728,7 @@ const NAV_ITEMS = [
   { id: "filing",    label: "本年度試算", icon: "✎", desc: "Tax Filing" },
   { id: "compare",   label: "扣除額比較", icon: "⚖", desc: "Deduction Compare" },
   { id: "history",   label: "歷史紀錄", icon: "❡", desc: "History" },
+  { id: "sources",   label: "資料來源指引", icon: "❓", desc: "Field Sources" },
   { id: "data",      label: "資料管理", icon: "⛁", desc: "Backup & Restore" },
   { id: "help",      label: "稅務參考", icon: "?", desc: "Tax Reference" },
 ];
@@ -1456,6 +1457,7 @@ function FilingPage({ data, setData, year, setPage }) {
         subtitle="每個申報戶獨立試算 · 系統自動比較標準/列舉扣除額,選擇較划算者"
         right={
           <div className="space-x-2">
+            <button className="btn-secondary text-sm" onClick={() => setPage("sources")}>? 不知道數字從哪來?</button>
             <button className="btn-secondary text-sm" onClick={cloneFromLastYear}>↻ 複製上年度</button>
             <button className="btn-primary text-sm" onClick={addFiling}
               disabled={data.members.length === 0}>+ 新增申報戶</button>
@@ -1874,7 +1876,22 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
               onChange={v => updateField("itemizedDeductions.disaster", v)} />
             <DeductionInput
               label="自用住宅購屋借款利息"
-              hint={`一屋為限,實際扣除 = 利息 − 儲蓄利息 (上限 ${fmt(params.mortgageLimit)})`}
+              hint={(() => {
+                const input = toNum(filing.itemizedDeductions.mortgageInterest);
+                if (input === 0) return `一屋為限,實際扣除 = 利息 − 儲蓄投資扣除額 (上限 ${fmt(params.mortgageLimit)})`;
+                const afterSavings = Math.max(0, input - result.savings);
+                const capped = Math.min(afterSavings, params.mortgageLimit);
+                if (capped === input) {
+                  return `✓ 全額列入 ${fmt(capped)} (儲蓄扣除額 0)`;
+                }
+                if (capped === 0) {
+                  return `⚠ 儲蓄扣除 ${fmt(result.savings)} 已大於利息,實際列入 0`;
+                }
+                if (afterSavings > params.mortgageLimit) {
+                  return `輸入 ${fmt(input)} − 儲蓄 ${fmt(result.savings)} = ${fmt(afterSavings)},超上限 → 列入 ${fmt(params.mortgageLimit)}`;
+                }
+                return `輸入 ${fmt(input)} − 儲蓄扣除 ${fmt(result.savings)} = 實際列入 ${fmt(capped)}`;
+              })()}
               value={filing.itemizedDeductions.mortgageInterest}
               onChange={v => updateField("itemizedDeductions.mortgageInterest", v)} />
             <DeductionInput
@@ -1907,6 +1924,46 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                   ? `比標準多 ${fmt(result.itemizedTotal - result.standardDeduction)}`
                   : `比標準少 ${fmt(result.standardDeduction - result.itemizedTotal)}`}
               </div>
+              {/* 列舉明細展開 */}
+              <details className="mt-2">
+                <summary className="text-xs cursor-pointer" style={{ color: "var(--accent-deep)" }}>
+                  <span className="chevron inline-block mr-1">▸</span>展開列舉明細
+                </summary>
+                <div className="mt-2 space-y-0.5 text-xs">
+                  {result.itemizedDetail.donationGeneral > 0 && (
+                    <div className="flex justify-between"><span>一般捐贈 (≤20%)</span><span className="num">{fmt(result.itemizedDetail.donationGeneral)}</span></div>
+                  )}
+                  {result.itemizedDetail.donationUnlimited > 0 && (
+                    <div className="flex justify-between"><span>不限額捐贈</span><span className="num">{fmt(result.itemizedDetail.donationUnlimited)}</span></div>
+                  )}
+                  {result.itemizedDetail.insurancePersonal > 0 && (
+                    <div className="flex justify-between"><span>人身保險 (≤24k×人)</span><span className="num">{fmt(result.itemizedDetail.insurancePersonal)}</span></div>
+                  )}
+                  {result.itemizedDetail.insuranceHealth > 0 && (
+                    <div className="flex justify-between"><span>健保費</span><span className="num">{fmt(result.itemizedDetail.insuranceHealth)}</span></div>
+                  )}
+                  {result.itemizedDetail.medical > 0 && (
+                    <div className="flex justify-between"><span>醫藥及生育</span><span className="num">{fmt(result.itemizedDetail.medical)}</span></div>
+                  )}
+                  {result.itemizedDetail.disaster > 0 && (
+                    <div className="flex justify-between"><span>災害損失</span><span className="num">{fmt(result.itemizedDetail.disaster)}</span></div>
+                  )}
+                  {(() => {
+                    const rawMortgage = toNum(filing.itemizedDeductions.mortgageInterest);
+                    const actual = result.itemizedDetail.mortgageInterest;
+                    if (rawMortgage === 0) return null;
+                    return (
+                      <div className="flex justify-between" style={{ color: actual < rawMortgage ? "var(--gold)" : "inherit" }}>
+                        <span>房貸利息 {actual < rawMortgage ? `(${fmt(rawMortgage)}−儲蓄${fmt(result.savings)})` : ""}</span>
+                        <span className="num">{fmt(actual)}</span>
+                      </div>
+                    );
+                  })()}
+                  <div className="flex justify-between border-t pt-1 mt-1 font-medium" style={{ borderColor: "var(--green)" }}>
+                    <span>合計</span><span className="num">{fmt(result.itemizedTotal)}</span>
+                  </div>
+                </div>
+              </details>
             </div>
           </div>
         </div>
@@ -2139,6 +2196,17 @@ function ResultPanel({ result, year }) {
             <Row label="綜合所得總額" v={result.grossIncome} bold border />
             <Row label="− 免稅額" v={-result.exemption} muted />
             <Row label={`− 一般扣除額 (${result.useItemized ? "列舉" : "標準"})`} v={-result.generalDeduction} muted />
+            {result.useItemized && (
+              <div className="ml-3 pl-2 my-1 space-y-0.5" style={{ borderLeft: "2px solid var(--line-soft)" }}>
+                {result.itemizedDetail.donationGeneral > 0 && <SubRow label="一般捐贈" v={result.itemizedDetail.donationGeneral} />}
+                {result.itemizedDetail.donationUnlimited > 0 && <SubRow label="不限額捐贈" v={result.itemizedDetail.donationUnlimited} />}
+                {result.itemizedDetail.insurancePersonal > 0 && <SubRow label="人身保險" v={result.itemizedDetail.insurancePersonal} />}
+                {result.itemizedDetail.insuranceHealth > 0 && <SubRow label="健保費" v={result.itemizedDetail.insuranceHealth} />}
+                {result.itemizedDetail.medical > 0 && <SubRow label="醫藥及生育" v={result.itemizedDetail.medical} />}
+                {result.itemizedDetail.disaster > 0 && <SubRow label="災害損失" v={result.itemizedDetail.disaster} />}
+                {result.itemizedDetail.mortgageInterest > 0 && <SubRow label="自宅購屋借款利息" v={result.itemizedDetail.mortgageInterest} />}
+              </div>
+            )}
             <Row label="− 薪資特扣" v={-result.salarySD} muted />
             <Row label={`− 儲蓄投資特扣${result.savings !== result.savingsAuto ? " (手動)" : ""}`} v={-result.savings} muted />
             {result.disabilityDed > 0 && <Row label="− 身心障礙特扣" v={-result.disabilityDed} muted />}
@@ -2238,6 +2306,15 @@ function Row({ label, v, bold, muted, border }) {
     <div className={`flex justify-between py-1 ${border ? "border-t pt-2" : ""}`}
       style={{ borderColor: "var(--line)", fontWeight: bold ? 600 : 400, color: muted ? "var(--ink-soft)" : "var(--ink)" }}>
       <span className="text-xs">{label}</span>
+      <span className="num">{fmt(v)}</span>
+    </div>
+  );
+}
+
+function SubRow({ label, v }) {
+  return (
+    <div className="flex justify-between" style={{ color: "var(--ink-mute)", fontSize: "11px" }}>
+      <span>· {label}</span>
       <span className="num">{fmt(v)}</span>
     </div>
   );
@@ -2523,6 +2600,310 @@ function DataPage({ data, setData }) {
 // ============================================================
 // 稅務參考頁
 // ============================================================
+// ============================================================
+// 資料來源指引頁
+// ============================================================
+function SourcesPage({ setPage }) {
+  return (
+    <div className="fade-in">
+      <PageHeader
+        ornament="§ FIELD SOURCES · 資料來源指引"
+        title="每個欄位的數字從哪來?"
+        subtitle="對照財政部報稅系統的實際畫面,告訴你各欄位對應哪份文件、哪個畫面"
+      />
+
+      {/* Step 1: 取得查詢碼 */}
+      <div className="card mb-5">
+        <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
+          STEP 1 · 先到財政部下載你的「所得及扣除額資料」
+        </div>
+        <div className="p-5 text-sm space-y-3" style={{ color: "var(--ink-soft)" }}>
+          <p>
+            <b>最快的方法</b>:打開財政部報稅網站 <a href="https://tax.nat.gov.tw/" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent-deep)" }}>tax.nat.gov.tw</a>,
+            登入後系統會幫你帶出國稅局有的全部所得與扣除額資料,你照著抄到這個試算系統就行。
+          </p>
+          <div className="p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <div className="text-xs font-medium mb-2">六種登入方式 (擇一):</div>
+            <ul className="text-xs space-y-1 ml-4 list-disc">
+              <li><b>行動電話認證</b>(最方便)— 限中華電信、台灣大哥大、遠傳用戶,門號需登記在本人名下</li>
+              <li><b>戶口名簿戶號 + 查詢碼</b> — 查詢碼可到 7-11/全家/萊爾富/OK 多媒體機列印 (需自然人憑證),或臨櫃申辦</li>
+              <li><b>自然人憑證</b> — 需讀卡機</li>
+              <li><b>已註冊的健保卡</b> — 需讀卡機 + 健保署註冊</li>
+              <li><b>行動自然人憑證</b> — 手機 App,需先用自然人憑證綁定</li>
+              <li><b>稅額試算通知書上的查詢碼</b> — 國稅局每年 4 月底寄發給「適用試算」的家戶</li>
+            </ul>
+          </div>
+          <p className="text-xs">
+            ⓘ 每年 <b>4/28 ~ 6/30</b> 是查調期間。登入後點「下載所得及扣除額資料」就會看到所有國稅局有的資料。
+            <b>列印「所得、扣除額參考清單」</b>就是你抄到本系統最方便的依據。
+          </p>
+        </div>
+      </div>
+
+      {/* Step 2: 各欄位對照表 */}
+      <div className="mb-3">
+        <div className="ornament mb-2">STEP 2 · 各欄位資料來源對照</div>
+      </div>
+
+      <SourceCard
+        title="薪資所得"
+        fieldPath="本年度試算 → ① 各成員所得 → 薪資"
+        source="扣繳憑單 (各 5A、5B 等格式)"
+        howTo={[
+          "在「所得及扣除額參考清單」中找「薪資所得」項下的金額",
+          "格式代號 5A:薪資 (公司寄發的扣繳憑單)",
+          "如有多份工作,把所有 5A 加總",
+          "兼差/打工的所得也在這裡,但若是 9B 執行業務所得另外計算"
+        ]}
+        notes="若年薪資未達 218,000,系統會自動只扣實際薪資金額為扣除額"
+      />
+
+      <SourceCard
+        title="利息所得"
+        fieldPath="本年度試算 → ① 各成員所得 → 利息"
+        source="扣繳憑單 5A 利息 / 銀行存摺結算"
+        howTo={[
+          "找「利息所得」項目下的金額 (主要是銀行存款利息)",
+          "格式代號 5A:銀行/郵局/信託 利息",
+          "格式代號 71G:儲蓄性質信託資金收益",
+          "⚠ 公債、公司債、金融債券、短期票券、郵政存簿利息「不算」儲蓄投資扣除額"
+        ]}
+        notes="這個數字會自動帶到「儲蓄投資扣除額」,上限 270,000 / 戶。如果包含上述特殊利息,記得勾「手動覆寫」"
+      />
+
+      <SourceCard
+        title="股利所得"
+        fieldPath="本年度試算 → ① 各成員所得 → 股利"
+        source="股利憑單 (從證券商或公司寄發)"
+        howTo={[
+          "找「營利所得」項目下的金額",
+          "格式代號 54:現金股利 / 股票股利 / 盈餘",
+          "上市櫃股票股利由集保中心統一發送通知,可在 e 稅務查到",
+          "⚠ 股票買賣的「資本利得」不在這裡 (證交稅另外課)"
+        ]}
+        notes="系統預設合併計稅,自動算 8.5% 抵減 (上限 80,000)。在 ③ 抵減區可改成分開計稅 28%"
+      />
+
+      <SourceCard
+        title="租金收入"
+        fieldPath="本年度試算 → ⑤ 租賃紀錄"
+        source="自己保留的房客付款紀錄 / 租賃契約"
+        howTo={[
+          "國稅局清單可能不會列出全部租金 (除非房客是公司會扣繳)",
+          "主要依據:房客匯款紀錄、收據存根、契約書",
+          "依物件分開填,每筆填月租金 × 月數",
+          "若中間空租幾個月,把月數改少",
+          "可選擇類型:一般 / 公益出租人 / 包租代管 / 免稅紀錄"
+        ]}
+        notes="系統會自動套用 43% 必要費用率 (一般) 或公益出租人優惠 (每月免稅 15,000)"
+      />
+
+      <SourceCard
+        title="一般捐贈"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 一般捐贈"
+        source="受贈單位開立的「捐贈收據正本」"
+        howTo={[
+          "教育、文化、公益、慈善機構或團體",
+          "宗教團體捐款 (但點光明燈/安太歲/法會不算,因為有對價)",
+          "向學校的「捐贈不指定用途」",
+          "受贈單位若有上傳系統,清單會自動列出"
+        ]}
+        notes="上限為綜合所得總額 20%,系統自動截斷"
+      />
+
+      <SourceCard
+        title="不限額捐贈"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 不限額捐贈"
+        source="收據 (捐給政府/公立博物館等)"
+        howTo={[
+          "國防、勞軍捐贈",
+          "對各級政府的捐獻、對行政法人的捐贈",
+          "公立博物館的文物、藝術品、設備捐贈",
+          "古蹟修復或文化資產捐贈",
+          "對國家文化藝術基金會、縣市文化基金會的捐贈",
+          "未指定特定運動員的運動捐款 (透過體育署專戶)"
+        ]}
+        notes="這類捐贈沒有 20% 上限,可全額列入"
+      />
+
+      <SourceCard
+        title="人身保險費"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 人身保險費"
+        source="保險公司寄發的「繳費證明書」"
+        howTo={[
+          "壽險、健康險、傷害險、年金險、勞保、軍公教保",
+          "格式:保險公司每年 1-2 月會寄繳費證明",
+          "也可在保險公司網站下載",
+          "⚠ 必須是要保人 = 被保險人在同一申報戶 (健保費除外)",
+          "⚠ 不含:車險、火險、地震險、責任險 (財產險)"
+        ]}
+        notes={`每人上限 24,000;申報戶 N 人 = N × 24,000 為總上限。系統自動套上限。`}
+      />
+
+      <SourceCard
+        title="全民健保費"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 全民健保費"
+        source="繳費收據 / 薪資單健保扣款"
+        howTo={[
+          "薪資扣繳的健保費 (公司扣的那筆)",
+          "二代健保補充保費 (從利息、租金、股利、執行業務等扣的)",
+          "自付的健保費 (例如:無工作但有繼續加保)",
+          "全年加總,所有家戶成員的都可列"
+        ]}
+        notes="不限額,有多少列多少"
+      />
+
+      <SourceCard
+        title="醫藥及生育費"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 醫藥及生育費"
+        source="醫院/診所的「收據正本」"
+        howTo={[
+          "公立醫院、健保特約醫院、診所的醫療費收據",
+          "含掛號費、部分負擔、自費項目 (健保有給付的)",
+          "牙齒矯正/鑲牙 (治療性質) 可,純粹醫美 (雷射/隆乳) 不可",
+          "助聽器、義肢、輪椅 (需診斷證明)",
+          "長期照護機構費 (醫護人員提供的醫療部分)",
+          "⚠ 受保險給付部分要扣除"
+        ]}
+        notes="不限額,但要保留收據正本"
+      />
+
+      <SourceCard
+        title="災害損失"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 災害損失"
+        source="國稅局核發的「災害損失證明」"
+        howTo={[
+          "限不可抗力天災 (地震、颱風、水災、火災、土石流等)",
+          "受災後 30 日內向當地國稅局申報,他們會派員勘查並核發證明",
+          "⚠ 詐騙、竊盜、人禍不算",
+          "⚠ 受保險賠償部分要扣除"
+        ]}
+        notes="不限額,但需要當年度國稅局核發的損失證明"
+      />
+
+      <SourceCard
+        title="自用住宅購屋借款利息"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 自用住宅購屋借款利息"
+        source="銀行寄發的「借款利息繳款證明」"
+        howTo={[
+          "貸款銀行每年 1-2 月會主動寄發",
+          "也可登入網路銀行 → 貸款專區 → 下載證明",
+          "格式上會寫「房屋坐落地址、本年度繳納利息合計」",
+          "⚠ 必須是「自用住宅」(設籍且無出租/營業)",
+          "⚠ 一申報戶限一屋"
+        ]}
+        notes="實際可列 = 利息 − 儲蓄投資扣除額,上限 300,000。系統會自動算給你看"
+      />
+
+      <SourceCard
+        title="自住房屋租金支出 (特扣)"
+        fieldPath="本年度試算 → ② 列舉扣除額 → 自住房屋租金支出"
+        source="租賃契約 + 付款證明"
+        howTo={[
+          "限本人/配偶/受扶養直系親屬在台租屋自住",
+          "需檢附:租賃契約書、付款證明 (匯款明細、收據)",
+          "需設籍在承租地址 OR 切結書證明自住",
+          "⚠ 申報戶在台有自有房屋者不能扣 (除少數例外)",
+          "⚠ 稅率 20% 以上不適用 (高所得不能用此扣除額)"
+        ]}
+        notes="114 起改為特扣,上限 180,000 / 戶"
+      />
+
+      <SourceCard
+        title="已預扣繳稅額"
+        fieldPath="本年度試算 → ③ 抵減 → 已預扣繳稅額"
+        source="各類扣繳憑單上的「扣繳稅額」"
+        howTo={[
+          "薪資扣繳憑單 5A:有「扣繳稅額」一欄,把它加總",
+          "利息扣繳憑單:銀行存款利息扣 10% (僅當單筆達一定金額)",
+          "租賃所得扣繳 (房客是公司):扣 10%",
+          "執行業務 9B 扣繳 10%",
+          "把申報戶所有成員的扣繳稅額加總填入"
+        ]}
+        notes="此金額會在最後從「應納稅」中扣除,如果預扣 > 應納稅,你可以退稅"
+      />
+
+      <SourceCard
+        title="重購自用住宅退稅"
+        fieldPath="本年度試算 → ③ 抵減 → 重購自用住宅退稅"
+        source="原房地契約、新房地契約、移轉登記文件"
+        howTo={[
+          "出售自用住宅 + 2 年內買新自用住宅 (價格 ≥ 原售價)",
+          "或先買後賣的順序也可",
+          "需檢附買賣契約、戶籍遷入新址證明",
+          "向國稅局申請後核定金額",
+          "⚠ 此功能不常用,大部分人這欄填 0"
+        ]}
+        notes="所得稅法第 17-2 條規定的退稅"
+      />
+
+      <SourceCard
+        title="其他扣抵"
+        fieldPath="本年度試算 → ③ 抵減 → 其他扣抵"
+        source="各類抵減憑證"
+        howTo={[
+          "大陸地區所得已納稅額扣抵",
+          "投資抵減 (早期 BOT 公司股票)",
+          "其他國稅局個案核定的抵減",
+          "你的試算表上的「秀得美」如果不確定屬性,放這裡"
+        ]}
+        notes="這是「其他」分類,大部分人這欄是 0"
+      />
+
+      {/* Step 3: 快速核對 */}
+      <div className="card p-5 mt-6" style={{ background: "var(--accent-soft)", borderColor: "var(--accent)" }}>
+        <div className="ornament mb-2" style={{ color: "var(--accent-deep)" }}>STEP 3 · 三步驟快速核對</div>
+        <div className="text-sm space-y-2">
+          <div>
+            <b>1. 比對總所得</b> — 系統算的「綜合所得總額」應該等於國稅局清單上的「綜合所得總額」
+          </div>
+          <div>
+            <b>2. 比對淨額</b> — 系統算的「綜合所得淨額」應該等於國稅局清單上的「綜合所得淨額」或稅額試算通知書上的淨額
+          </div>
+          <div>
+            <b>3. 比對應納稅額</b> — 系統算的「應補繳稅額」應該接近 (有時差幾元四捨五入) 稅額試算通知書上的「自繳稅額」
+          </div>
+        </div>
+        <div className="text-xs mt-3" style={{ color: "var(--ink-soft)" }}>
+          ※ 如果差很多,先檢查「列舉 vs 標準」是否選對、扶養親屬是否一致、利息所得是否都填了。
+        </div>
+      </div>
+
+      <div className="mt-5">
+        <button className="btn-primary" onClick={() => setPage("filing")}>→ 開始輸入今年的資料</button>
+      </div>
+    </div>
+  );
+}
+
+function SourceCard({ title, fieldPath, source, howTo, notes }) {
+  return (
+    <details className="card mb-3" style={{ cursor: "default" }}>
+      <summary className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid transparent" }}>
+        <div className="flex-1">
+          <div className="font-medium">{title}</div>
+          <div className="text-xs mt-0.5" style={{ color: "var(--ink-mute)" }}>{fieldPath}</div>
+        </div>
+        <span className="chevron text-xs" style={{ color: "var(--ink-mute)" }}>▸</span>
+      </summary>
+      <div className="px-5 py-3" style={{ borderTop: "1px solid var(--line)" }}>
+        <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>
+          <span className="font-medium" style={{ color: "var(--accent-deep)" }}>來源文件:</span> {source}
+        </div>
+        <div className="text-xs mb-2 font-medium" style={{ color: "var(--ink-soft)" }}>怎麼找到這個數字:</div>
+        <ul className="text-xs space-y-1 ml-4 list-disc mb-3" style={{ color: "var(--ink-soft)" }}>
+          {howTo.map((h, i) => <li key={i}>{h}</li>)}
+        </ul>
+        {notes && (
+          <div className="text-xs p-2 rounded" style={{ background: "#fafaf6", color: "var(--ink-soft)" }}>
+            ⓘ {notes}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function HelpPage({ year }) {
   const p = TAX_PARAMS[year];
   return (
@@ -2808,6 +3189,7 @@ function App() {
           {page === "filing" && <FilingPage {...props} />}
           {page === "compare" && <ComparePage {...props} />}
           {page === "history" && <HistoryPage {...props} />}
+          {page === "sources" && <SourcesPage {...props} />}
           {page === "data" && <DataPage {...props} />}
           {page === "help" && <HelpPage {...props} />}
         </div>
