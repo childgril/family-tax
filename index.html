@@ -399,9 +399,15 @@ function computeTaxForFiling(filing, members, year) {
     dividend += toNum(income.dividend);
     otherIncome += toNum(income.other);
 
-    // 租金 (從 properties 找出此人擁有的)
+    // 租金 (從該年度的 rentalRecords 找出此人擁有、且勾選計入的紀錄)
     const myProps = (filing.properties || []).filter(p => p.ownerId === m.id);
-    const r = computeRentalIncome(myProps, params);
+    const myComputable = myProps
+      .map(p => {
+        const rec = getRentalRecord(filing.rentalRecords || [], p, filing.year);
+        return rec.includeInFiling && !rec.isVirtual ? recordToComputable(rec, p) : null;
+      })
+      .filter(Boolean);
+    const r = computeRentalIncome(myComputable, params);
     rentalTaxable += r.taxable;
     rentalDetail.push({ memberId: m.id, ...r });
 
@@ -621,8 +627,45 @@ const SAMPLE_DATA = {
   members: [],
   filings: [],
   properties: [],
-  meta: { lastSavedAt: null, version: 1 },
+  rentalRecords: [], // 每年租賃紀錄: {id, propertyId, year, monthlyRent, months, type, expenseRatio, includeInFiling, note}
+  meta: { lastSavedAt: null, version: 2 },
 };
+
+// 給定一個物件 + 年度,找出該年度的紀錄;若不存在則用物件預設值組成虛擬紀錄
+function getRentalRecord(rentalRecords, property, year) {
+  const found = (rentalRecords || []).find(r => r.propertyId === property.id && r.year === year);
+  if (found) return found;
+  // 沒紀錄: 預設「未建立紀錄,不計入申報」
+  return {
+    id: null,
+    propertyId: property.id,
+    year,
+    monthlyRent: 0,
+    months: 0,
+    type: property.type || "general",
+    expenseRatio: property.expenseRatio || 0.43,
+    taxFreeReason: "",
+    note: "(尚未建立此年度紀錄)",
+    includeInFiling: false,
+    isVirtual: true, // 標記為未實際儲存
+  };
+}
+
+// 把紀錄轉換為 computeRentalIncome 可用的格式
+function recordToComputable(rec, property) {
+  return {
+    id: rec.id || property.id,
+    name: property.name,
+    address: property.address,
+    ownerId: property.ownerId,
+    type: rec.type,
+    monthlyRent: rec.monthlyRent,
+    months: rec.months,
+    expenseRatio: rec.expenseRatio,
+    taxFreeReason: rec.taxFreeReason,
+    note: rec.note,
+  };
+}
 
 // ============================================================
 // 持久化 (localStorage)
@@ -633,9 +676,42 @@ function loadData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return SAMPLE_DATA;
     const parsed = JSON.parse(raw);
-    return { ...SAMPLE_DATA, ...parsed };
+    const merged = { ...SAMPLE_DATA, ...parsed };
+    return migrateData(merged);
   } catch (e) { return SAMPLE_DATA; }
 }
+
+// 版本升級: v1 → v2 (加入 rentalRecords)
+function migrateData(data) {
+  const version = data.meta?.version || 1;
+  if (version >= 2) return data;
+  // v1 → v2: 從舊 properties + 所有 filings 自動產生每年紀錄,都預設「計入」
+  if (!data.rentalRecords) data.rentalRecords = [];
+  const existsForPropYear = new Set(data.rentalRecords.map(r => `${r.propertyId}_${r.year}`));
+  const allYears = [...new Set((data.filings || []).map(f => f.year))];
+  (data.properties || []).forEach(p => {
+    allYears.forEach(y => {
+      const key = `${p.id}_${y}`;
+      if (!existsForPropYear.has(key)) {
+        data.rentalRecords.push({
+          id: uid(),
+          propertyId: p.id,
+          year: y,
+          monthlyRent: p.monthlyRent || 0,
+          months: p.months || 12,
+          type: p.type || "general",
+          expenseRatio: p.expenseRatio || 0.43,
+          taxFreeReason: p.taxFreeReason || "",
+          note: "(舊資料自動匯入)",
+          includeInFiling: true,
+        });
+      }
+    });
+  });
+  data.meta = { ...(data.meta || {}), version: 2 };
+  return data;
+}
+
 function saveData(data) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...data, meta: { ...data.meta, lastSavedAt: new Date().toISOString() } }));
@@ -723,10 +799,21 @@ function PageHeader({ title, subtitle, ornament, right }) {
 
 // ============================================================
 // Dashboard 頁
+// 包裝 computeTaxForFiling: 自動填入該申報戶所屬物件 + rentalRecords
+function computeFilingWithData(filing, data, year) {
+  const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
+  const householdProps = (data.properties || []).filter(p => filerIds.includes(p.ownerId));
+  return computeTaxForFiling(
+    { ...filing, properties: householdProps, rentalRecords: data.rentalRecords || [] },
+    data.members,
+    year
+  );
+}
+
 // ============================================================
 function Dashboard({ data, year, setPage }) {
   const yearFilings = data.filings.filter(f => f.year === year);
-  const results = yearFilings.map(f => computeTaxForFiling(f, data.members, year));
+  const results = yearFilings.map(f => computeFilingWithData(f, data, year));
   const totalTax = results.reduce((s, r) => s + (r?.tax || 0), 0);
   const totalIncome = results.reduce((s, r) => s + (r?.grossIncome || 0), 0);
   const totalSaving = results.reduce((s, r) => s + Math.max(0, r?.saving || 0), 0);
@@ -734,7 +821,7 @@ function Dashboard({ data, year, setPage }) {
   // 歷年比較
   const yearTotals = AVAILABLE_YEARS.map(y => {
     const fs = data.filings.filter(f => f.year === y);
-    const rs = fs.map(f => computeTaxForFiling(f, data.members, y));
+    const rs = fs.map(f => computeFilingWithData(f, data, y));
     return {
       year: y,
       tax: rs.reduce((s, r) => s + (r?.tax || 0), 0),
@@ -1105,8 +1192,8 @@ function PropertiesPage({ data, setData, year }) {
     <div className="fade-in">
       <PageHeader
         ornament="§ RENTAL PROPERTIES · 出租物件"
-        title="租賃所得管理"
-        subtitle={`管理家族所有出租物件 · 套用 ${year} 年度稅務參數`}
+        title="租賃物件樣板"
+        subtitle="此處只是物件「樣板」(預設值),實際每年租金請到「本年度試算」的⑤租賃紀錄編輯"
         right={
           <button className="btn-primary text-sm" disabled={data.members.length === 0}
             onClick={() => setEditing({ ...blank })}>+ 新增物件</button>
@@ -1138,11 +1225,9 @@ function PropertiesPage({ data, setData, year }) {
               <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
                 <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
-                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>月租</th>
-                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>月數</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年收入</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應稅所得</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>預設類型</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>預設月租</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>已建立紀錄年度</th>
                 <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
               </tr>
             </thead>
@@ -1150,6 +1235,10 @@ function PropertiesPage({ data, setData, year }) {
               {enriched.map(p => {
                 const owner = data.members.find(m => m.id === p.ownerId);
                 const t = TYPES[p.type] || TYPES.general;
+                const yearsWithRecord = (data.rentalRecords || [])
+                  .filter(r => r.propertyId === p.id)
+                  .map(r => r.year)
+                  .sort();
                 return (
                   <tr key={p.id} className="table-row">
                     <td className="px-5 py-3">
@@ -1159,14 +1248,22 @@ function PropertiesPage({ data, setData, year }) {
                     <td className="px-3 py-3">{owner?.name || "—"}</td>
                     <td className="px-3 py-3"><span className={`chip ${t.chip}`}>{t.label}</span></td>
                     <td className="px-3 py-3 text-right num">{fmt(p.monthlyRent)}</td>
-                    <td className="px-3 py-3 text-center num">{p.months}</td>
-                    <td className="px-3 py-3 text-right num">{fmt(p.computed.gross)}</td>
-                    <td className="px-3 py-3 text-right num">
-                      <div>{fmt(p.computed.taxableIncome)}</div>
-                      {p.computed.exemptAmount > 0 && <div className="text-xs" style={{ color: "var(--green)" }}>免 {fmt(p.computed.exemptAmount)}</div>}
+                    <td className="px-3 py-3 text-center text-xs">
+                      {yearsWithRecord.length === 0 ? (
+                        <span style={{ color: "var(--ink-mute)" }}>無紀錄</span>
+                      ) : (
+                        <div className="flex gap-1 justify-center flex-wrap">
+                          {yearsWithRecord.map(y => {
+                            const rec = data.rentalRecords.find(r => r.propertyId === p.id && r.year === y);
+                            return <span key={y} className={`chip ${rec?.includeInFiling ? 'chip-green' : 'chip-amber'} text-[10px]`}>
+                              {y}{rec?.includeInFiling ? "" : " 不計入"}
+                            </span>;
+                          })}
+                        </div>
+                      )}
                     </td>
                     <td className="px-5 py-3 text-right space-x-1">
-                      <button className="btn-secondary text-xs" onClick={() => setEditing(p)}>編輯</button>
+                      <button className="btn-secondary text-xs" onClick={() => setEditing(p)}>編輯樣板</button>
                       <button className="btn-danger text-xs" onClick={() => remove(p.id)}>刪除</button>
                     </td>
                   </tr>
@@ -1310,8 +1407,6 @@ function FilingPage({ data, setData, year, setPage }) {
       spouseId: "",
       dependentIds: [],
       memberIncome: {},
-      properties: data.properties.map(p => p.id), // 預設套用所有物件 (使用 id 即可)
-      // 但其實我們直接用 data.properties 內容來算 (要看哪個 owner 在這申報戶中)
       itemizedDeductions: {
         donationGeneral: 0, donationUnlimited: 0,
         insurancePersonal: 0, insuranceHealth: 0,
@@ -1382,7 +1477,7 @@ function FilingPage({ data, setData, year, setPage }) {
           <div className="card overflow-hidden" style={{ alignSelf: "flex-start" }}>
             <div className="px-3 py-2 ornament" style={{ borderBottom: "1px solid var(--line)" }}>HOUSEHOLDS</div>
             {yearFilings.map(f => {
-              const r = computeTaxForFiling(f, data.members, year);
+              const r = computeFilingWithData(f, data, year);
               return (
                 <button key={f.id} onClick={() => setSelectedId(f.id)}
                   className={`w-full text-left px-3 py-3 border-b ${selectedId === f.id ? "" : "hover:bg-gray-50"}`}
@@ -1406,6 +1501,8 @@ function FilingPage({ data, setData, year, setPage }) {
               filing={selected}
               members={data.members}
               properties={data.properties}
+              rentalRecords={data.rentalRecords || []}
+              setRentalRecords={(next) => setData({ ...data, rentalRecords: next })}
               year={year}
               onChange={updateFiling}
               onDelete={() => deleteFiling(selected.id)}
@@ -1417,13 +1514,67 @@ function FilingPage({ data, setData, year, setPage }) {
   );
 }
 
-function FilingDetail({ filing, members, properties, year, onChange, onDelete }) {
+function FilingDetail({ filing, members, properties, rentalRecords, setRentalRecords, year, onChange, onDelete }) {
   // 把 properties 過濾出屬於這申報戶的人持有的
   const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
   const householdProperties = properties.filter(p => filerIds.includes(p.ownerId));
-  const filingForCompute = { ...filing, properties: householdProperties };
+  // 把該年度的 rentalRecords 帶入 filing 給計算用
+  const filingForCompute = { ...filing, properties: householdProperties, rentalRecords };
   const result = computeTaxForFiling(filingForCompute, members, year);
   const params = TAX_PARAMS[year];
+
+  // 物件 + 該年度紀錄 (含虛擬)
+  const yearRecords = householdProperties.map(p => ({
+    property: p,
+    record: getRentalRecord(rentalRecords, p, year),
+  }));
+
+  // 更新某物件的該年度紀錄
+  const upsertRecord = (propertyId, patch) => {
+    const idx = rentalRecords.findIndex(r => r.propertyId === propertyId && r.year === year);
+    if (idx >= 0) {
+      // 既有紀錄
+      const next = [...rentalRecords];
+      next[idx] = { ...next[idx], ...patch };
+      setRentalRecords(next);
+    } else {
+      // 新建紀錄
+      const property = householdProperties.find(p => p.id === propertyId);
+      const base = {
+        id: uid(),
+        propertyId,
+        year,
+        monthlyRent: property?.monthlyRent || 0,
+        months: property?.months || 12,
+        type: property?.type || "general",
+        expenseRatio: property?.expenseRatio || 0.43,
+        taxFreeReason: property?.taxFreeReason || "",
+        note: "",
+        includeInFiling: true,
+        ...patch,
+      };
+      setRentalRecords([...rentalRecords, base]);
+    }
+  };
+
+  // 從上一年複製到當前年
+  const copyFromPrevYear = (propertyId) => {
+    const prev = rentalRecords.find(r => r.propertyId === propertyId && r.year === year - 1);
+    if (!prev) return alert(`找不到 ${year - 1} 年度的紀錄`);
+    const { id, year: _y, ...rest } = prev;
+    upsertRecord(propertyId, { ...rest });
+  };
+
+  // 從物件預設值建立
+  const initFromProperty = (propertyId) => {
+    upsertRecord(propertyId, {});
+  };
+
+  // 刪除當前年的紀錄
+  const removeRecord = (propertyId) => {
+    if (!confirm(`確定刪除此物件 ${year} 年度的紀錄?`)) return;
+    setRentalRecords(rentalRecords.filter(r => !(r.propertyId === propertyId && r.year === year)));
+  };
 
   const taxpayer = members.find(m => m.id === filing.taxpayerId);
   const spouse = members.find(m => m.id === filing.spouseId);
@@ -1576,7 +1727,15 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
               {result.filers.map(m => {
                 const income = filing.memberIncome?.[m.id] || {};
                 const myProps = householdProperties.filter(p => p.ownerId === m.id);
-                const myRental = computeRentalIncome(myProps, params);
+                // 只算該年度勾選計入的紀錄
+                const myComputable = myProps
+                  .map(p => {
+                    const rec = getRentalRecord(rentalRecords, p, year);
+                    return rec.includeInFiling && !rec.isVirtual ? recordToComputable(rec, p) : null;
+                  })
+                  .filter(Boolean);
+                const myRental = computeRentalIncome(myComputable, params);
+                const includedCount = myComputable.length;
                 return (
                   <tr key={m.id} className="table-row">
                     <td className="py-2 font-medium">
@@ -1597,9 +1756,11 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
                       <input type="number" className="input-text w-24 text-right"
                         value={income.dividend || ""} onChange={e => updateIncome(m.id, "dividend", e.target.value)} />
                     </td>
-                    <td className="py-2 text-right num text-xs" title={myProps.map(p => p.name).join(", ")}>
+                    <td className="py-2 text-right num text-xs" title={myComputable.map(p => p.name).join(", ")}>
                       {fmt(myRental.taxable)}
-                      {myProps.length > 0 && <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{myProps.length} 物件</div>}
+                      {myProps.length > 0 && <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                        計入 {includedCount}/{myProps.length} 物件
+                      </div>}
                     </td>
                     <td className="py-2 text-right">
                       <input type="number" className="input-text w-24 text-right"
@@ -1826,38 +1987,122 @@ function FilingDetail({ filing, members, properties, year, onChange, onDelete })
       {/* 試算結果 */}
       <ResultPanel result={result} year={year} />
 
-      {/* 物件列表 (參考) */}
+      {/* 本戶租賃 — 每年獨立紀錄 */}
       {householdProperties.length > 0 && (
         <div className="card">
-          <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
-            ⑤ RENTAL PROPERTIES IN HOUSEHOLD · 本戶租賃所得明細
+          <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+            <div className="ornament">⑤ RENTAL RECORDS · 本戶 {year} 年度租賃紀錄</div>
+            <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+              每年獨立記錄,勾選「計入申報」才會列入綜所所得
+            </div>
           </div>
           <table className="w-full text-sm">
             <thead style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
               <tr>
-                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件</th>
-                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>計入?</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件 / 屋主</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年收入</th>
-                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應稅所得</th>
+                <th className="text-right px-2 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>月租</th>
+                <th className="text-center px-2 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>月數</th>
+                <th className="text-right px-2 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年收入</th>
+                <th className="text-right px-2 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應稅</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
               </tr>
             </thead>
             <tbody>
-              {householdProperties.map(p => {
+              {yearRecords.map(({ property: p, record: rec }) => {
                 const owner = members.find(m => m.id === p.ownerId);
-                const r = computeRentalIncome([p], params).breakdown[0];
+                const computable = recordToComputable(rec, p);
+                const calc = computeRentalIncome([computable], params).breakdown[0];
+                const isVirtual = rec.isVirtual;
+                const hasPrevYear = rentalRecords.some(r => r.propertyId === p.id && r.year === year - 1);
+
                 return (
-                  <tr key={p.id} className="table-row">
-                    <td className="px-5 py-2">{p.name}</td>
-                    <td className="px-3 py-2">{owner?.name}</td>
-                    <td className="px-3 py-2 text-xs">{r.note}</td>
-                    <td className="px-3 py-2 text-right num">{fmt(r.gross)}</td>
-                    <td className="px-5 py-2 text-right num font-medium">{fmt(r.taxableIncome)}</td>
+                  <tr key={p.id} className="table-row" style={{ opacity: !rec.includeInFiling || isVirtual ? 0.6 : 1 }}>
+                    <td className="px-3 py-2 text-center">
+                      {isVirtual ? (
+                        <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
+                      ) : (
+                        <input type="checkbox" checked={!!rec.includeInFiling}
+                          onChange={e => upsertRecord(p.id, { includeInFiling: e.target.checked })} />
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-xs">{p.name}</div>
+                      <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{owner?.name}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      {isVirtual ? <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span> : (
+                        <select className="text-xs px-1 py-0.5 rounded border"
+                          style={{ borderColor: "var(--line)", background: "#fafaf6" }}
+                          value={rec.type}
+                          onChange={e => upsertRecord(p.id, { type: e.target.value })}>
+                          <option value="general">一般 43%</option>
+                          <option value="public">公益出租人</option>
+                          <option value="subletAgent">包租代管</option>
+                          <option value="taxFree">免稅紀錄</option>
+                        </select>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-right">
+                      {isVirtual ? "—" : (
+                        <input type="number" className="input-text w-20 text-right text-xs py-1"
+                          value={rec.monthlyRent || 0}
+                          onChange={e => upsertRecord(p.id, { monthlyRent: Number(e.target.value) || 0 })} />
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-center">
+                      {isVirtual ? "—" : (
+                        <input type="number" className="input-text w-12 text-center text-xs py-1"
+                          min={0} max={12}
+                          value={rec.months || 0}
+                          onChange={e => upsertRecord(p.id, { months: Number(e.target.value) || 0 })} />
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-right num text-xs">{fmt(calc.gross)}</td>
+                    <td className="px-2 py-2 text-right num text-xs font-medium">
+                      {rec.includeInFiling && !isVirtual ? fmt(calc.taxableIncome) :
+                        <span style={{ color: "var(--ink-mute)" }}>不計入</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {isVirtual ? (
+                        <div className="flex gap-1 justify-end">
+                          {hasPrevYear && (
+                            <button className="btn-secondary text-[10px] px-1 py-0.5"
+                              onClick={() => copyFromPrevYear(p.id)} title={`複製 ${year - 1} 年資料`}>↻</button>
+                          )}
+                          <button className="btn-secondary text-[10px] px-1 py-0.5"
+                            onClick={() => initFromProperty(p.id)}>+ 建立</button>
+                        </div>
+                      ) : (
+                        <button className="btn-danger text-[10px] px-1 py-0.5"
+                          onClick={() => removeRecord(p.id)}>清除</button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
+            <tfoot>
+              <tr className="divider-double" style={{ background: "#fafaf6" }}>
+                <td colSpan={5} className="px-3 py-2 text-xs">
+                  <span style={{ color: "var(--ink-mute)" }}>
+                    本戶 {year} 年度計入申報的應稅租金所得合計
+                  </span>
+                </td>
+                <td className="px-2 py-2 text-right num text-xs">
+                  {fmt(yearRecords
+                    .filter(({ record: r }) => !r.isVirtual)
+                    .reduce((s, { property, record }) => s + computeRentalIncome([recordToComputable(record, property)], params).breakdown[0].gross, 0))}
+                </td>
+                <td className="px-2 py-2 text-right num font-medium">{fmt(result.rentalTaxable)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
           </table>
+          <div className="px-5 py-3 text-xs" style={{ color: "var(--ink-mute)", borderTop: "1px solid var(--line-soft)" }}>
+            ⓘ 操作說明: <b>+ 建立</b> = 從物件預設值建立 {year} 年紀錄;<b>↻</b> = 複製上一年度紀錄;<b>清除</b> = 刪除此年度紀錄(物件本體保留)
+          </div>
         </div>
       )}
     </div>
@@ -2031,7 +2276,7 @@ function ComparePage({ data, year }) {
               {yearFilings.map(f => {
                 const filerIds = [f.taxpayerId, f.spouseId, ...(f.dependentIds || [])].filter(Boolean);
                 const householdProps = data.properties.filter(p => filerIds.includes(p.ownerId));
-                const filingForCompute = { ...f, properties: householdProps };
+                const filingForCompute = { ...f, properties: householdProps, rentalRecords: data.rentalRecords || [] };
                 const result = computeTaxForFiling(filingForCompute, data.members, year);
                 if (!result) return null;
                 const recommended = result.itemizedTotal > result.standardDeduction ? "itemized" : "standard";
@@ -2077,7 +2322,7 @@ function HistoryPage({ data }) {
       filings.forEach(f => {
         const filerIds = [f.taxpayerId, f.spouseId, ...(f.dependentIds || [])].filter(Boolean);
         const householdProps = data.properties.filter(p => filerIds.includes(p.ownerId));
-        const result = computeTaxForFiling({ ...f, properties: householdProps }, data.members, y);
+        const result = computeTaxForFiling({ ...f, properties: householdProps, rentalRecords: data.rentalRecords || [] }, data.members, y);
         if (!result) return;
         const income = f.memberIncome?.[m.id] || {};
         const role = f.taxpayerId === m.id ? "本人" : (f.spouseId === m.id ? "配偶" : "扶養");
@@ -2180,7 +2425,7 @@ function DataPage({ data, setData }) {
         const obj = JSON.parse(ev.target.result);
         if (!obj.members || !obj.filings) throw new Error("檔案格式不正確");
         if (!confirm(`確定要匯入此檔案?\n成員: ${obj.members.length}, 申報戶: ${obj.filings.length}, 物件: ${obj.properties?.length || 0}\n\n這會覆蓋現有所有資料。`)) return;
-        setData({ ...SAMPLE_DATA, ...obj });
+        setData(migrateData({ ...SAMPLE_DATA, ...obj }));
         alert("匯入成功!");
       } catch (err) {
         alert("匯入失敗: " + err.message);
@@ -2456,6 +2701,17 @@ const SAMPLE_FAMILY = (() => {
       { id: propIds[1], name: "新北板橋公寓", address: "新北市板橋區", ownerId: ids[0], type: "public", monthlyRent: 18000, months: 12, expenseRatio: 0.43, note: "公益出租人,租給政府指定戶", taxFreeReason: "" },
       { id: propIds[2], name: "台中西區雅房", address: "台中市西區", ownerId: ids[2], type: "subletAgent", monthlyRent: 16000, months: 12, expenseRatio: 0.43, note: "委託崔媽媽包租代管", taxFreeReason: "" },
       { id: propIds[3], name: "祖厝", address: "嘉義市", ownerId: ids[6], type: "taxFree", monthlyRent: 0, months: 0, note: "自住,留紀錄用", taxFreeReason: "自住,未出租" },
+    ],
+    rentalRecords: [
+      // 114 年度
+      { id: uid(), propertyId: propIds[0], year: 114, monthlyRent: 25000, months: 12, type: "general", expenseRatio: 0.43, includeInFiling: true,  note: "" },
+      { id: uid(), propertyId: propIds[1], year: 114, monthlyRent: 18000, months: 12, type: "public", expenseRatio: 0.43, includeInFiling: true,  note: "公益出租人合約延續" },
+      { id: uid(), propertyId: propIds[2], year: 114, monthlyRent: 16000, months: 12, type: "subletAgent", expenseRatio: 0.43, includeInFiling: true,  note: "" },
+      { id: uid(), propertyId: propIds[3], year: 114, monthlyRent: 0,     months: 0,  type: "taxFree", expenseRatio: 0.43, taxFreeReason: "自住", includeInFiling: false, note: "自住不計入" },
+      // 113 年度 (上一年,月租較低)
+      { id: uid(), propertyId: propIds[0], year: 113, monthlyRent: 23000, months: 12, type: "general", expenseRatio: 0.43, includeInFiling: true, note: "去年漲租前" },
+      { id: uid(), propertyId: propIds[1], year: 113, monthlyRent: 18000, months: 12, type: "public", expenseRatio: 0.43, includeInFiling: true, note: "" },
+      { id: uid(), propertyId: propIds[2], year: 113, monthlyRent: 15000, months: 10, type: "subletAgent", expenseRatio: 0.43, includeInFiling: true, note: "11-12 月空租" },
     ],
     filings: [
       {
