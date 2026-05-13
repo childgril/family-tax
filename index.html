@@ -1710,10 +1710,14 @@ function Toggle({ label, value, onChange, hint }) {
 // ============================================================
 function PropertiesPage({ data, setData, year }) {
   const [editing, setEditing] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [sortBy, setSortBy] = useState("serial"); // serial / owner
+  const [sortDir, setSortDir] = useState("asc"); // asc / desc
+  const fileRef = useRef(null);
   const params = TAX_PARAMS[year];
 
   const blank = {
-    id: "", name: "", address: "", ownerId: data.members[0]?.id || "",
+    id: "", serial: "", name: "", address: "", ownerId: data.members[0]?.id || "",
     type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43,
     note: "", taxFreeReason: ""
   };
@@ -1734,6 +1738,130 @@ function PropertiesPage({ data, setData, year }) {
     setData({ ...data, properties: data.properties.filter(p => p.id !== id) });
   };
 
+  // 全部清除 (物件 + 相關合約)
+  const clearAll = () => {
+    const propCount = data.properties.length;
+    const contractCount = (data.contracts || []).length;
+    if (propCount === 0 && contractCount === 0) return alert("沒有資料可清除");
+    if (!confirm(`確定要清除全部 ${propCount} 筆物件與 ${contractCount} 份合約?\n此操作無法復原。`)) return;
+    if (!confirm("再次確認: 真的要清除全部?")) return;
+    setData({ ...data, properties: [], contracts: [] });
+  };
+
+  // CSV 匯入
+  const handleImportCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const rows = parseCSV(ev.target.result);
+        if (rows.length < 2) return alert("CSV 為空或只有標題列");
+        const headers = rows[0].map(h => String(h || "").trim());
+        const findCol = (...names) => {
+          for (const name of names) {
+            const i = headers.findIndex(h => h === name);
+            if (i >= 0) return i;
+          }
+          for (const name of names) {
+            const i = headers.findIndex(h => h.includes(name));
+            if (i >= 0) return i;
+          }
+          return -1;
+        };
+        const idx = {
+          serial: findCol("序號", "編號", "no"),
+          owner: findCol("屋主", "所有人", "owner"),
+          address: findCol("地址", "address"),
+          note: findCol("備註", "note"),
+        };
+        const debugInfo = `偵測到的欄位:\n${headers.map((h, i) =>
+          `[${i}] "${h}" → ${
+            i === idx.serial ? "序號" :
+            i === idx.owner ? "屋主" :
+            i === idx.address ? "地址" :
+            i === idx.note ? "備註" : "(忽略)"
+          }`).join("\n")}`;
+
+        if (idx.address < 0) return alert(`找不到「地址」欄。\n\n${debugInfo}`);
+
+        const newProps = [];
+        const skipped = [];
+        const ownerErrors = [];
+        rows.slice(1).forEach((r, i) => {
+          const address = (r[idx.address] || "").trim();
+          if (!address) return;
+          const serial = idx.serial >= 0 ? (r[idx.serial] || "").trim() : "";
+          const ownerName = idx.owner >= 0 ? (r[idx.owner] || "").trim() : "";
+          const owner = data.members.find(m => m.name === ownerName);
+          if (!owner) {
+            const ownerHint = data.members.length > 0
+              ? `成員: ${data.members.map(m => m.name).join("、")}`
+              : "尚未建立家庭成員";
+            ownerErrors.push(`第 ${i+2} 列 (${serial || address}): 找不到屋主「${ownerName}」(${ownerHint})`);
+            return;
+          }
+          const existing = [...(data.properties || []), ...newProps].find(p =>
+            (serial && p.serial === serial) ||
+            String(p.address || "").trim() === address);
+          if (existing) {
+            skipped.push(`第 ${i+2} 列 (${serial || address}): 已存在,略過`);
+            return;
+          }
+          const name = serial ? `${serial} ${address}` : address;
+          newProps.push({
+            id: uid(),
+            serial,
+            name,
+            address,
+            ownerId: owner.id,
+            type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43,
+            note: idx.note >= 0 ? (r[idx.note] || "") : "",
+            taxFreeReason: "",
+          });
+        });
+
+        if (newProps.length === 0) {
+          let msg = "沒有匯入任何資料\n\n";
+          if (ownerErrors.length > 0) msg += `⚠ 屋主問題:\n${ownerErrors.join("\n")}\n\n`;
+          if (skipped.length > 0) msg += `⊘ 略過:\n${skipped.join("\n")}\n\n`;
+          msg += debugInfo;
+          return alert(msg);
+        }
+        let summary = `✓ 成功匯入 ${newProps.length} 筆物件`;
+        if (ownerErrors.length > 0) summary += `\n\n⚠ ${ownerErrors.length} 筆因屋主問題未匯入:\n${ownerErrors.join("\n")}`;
+        if (skipped.length > 0) summary += `\n\n⊘ ${skipped.length} 筆已存在略過:\n${skipped.join("\n")}`;
+        setData({ ...data, properties: [...(data.properties || []), ...newProps] });
+        alert(summary);
+        e.target.value = "";
+      } catch (err) {
+        alert("匯入失敗: " + err.message);
+      }
+    };
+    reader.readAsText(file, "UTF-8");
+  };
+
+  const handleDownloadTemplate = () => {
+    downloadCSVHelper("物件範本.csv", PROPERTIES_CSV_SAMPLE);
+  };
+
+  const handleExportCSV = () => {
+    if (data.properties.length === 0) return alert("沒有物件可匯出");
+    const rows = [PROPERTIES_CSV_HEADERS.join(",")];
+    const sorted = [...data.properties].sort((a, b) =>
+      String(a.serial || "").localeCompare(String(b.serial || "")));
+    sorted.forEach(p => {
+      const owner = data.members.find(m => m.id === p.ownerId);
+      rows.push([
+        JSON.stringify(p.serial || ""),
+        JSON.stringify(owner?.name || ""),
+        JSON.stringify(p.address || ""),
+        JSON.stringify(p.note || "")
+      ].join(","));
+    });
+    downloadCSVHelper(`物件_${new Date().toISOString().slice(0,10)}.csv`, rows.join("\n"));
+  };
+
   const TYPES = {
     general: { label: "一般出租", chip: "chip-amber", desc: "43% 必要費用" },
     public: { label: "公益出租人", chip: "chip-green", desc: "每月免稅 15,000" },
@@ -1741,25 +1869,96 @@ function PropertiesPage({ data, setData, year }) {
     taxFree: { label: "免稅紀錄", chip: "chip-accent", desc: "不報稅,留底" },
   };
 
-  // 預先算每個物件的應稅與免稅金額;依序號排序
+  // 排序
+  const sortFn = (a, b) => {
+    let av, bv;
+    if (sortBy === "owner") {
+      const oa = data.members.find(m => m.id === a.ownerId);
+      const ob = data.members.find(m => m.id === b.ownerId);
+      av = oa?.name || ""; bv = ob?.name || "";
+    } else {
+      av = String(a.serial || ""); bv = String(b.serial || "");
+    }
+    const cmp = av.localeCompare(bv, "zh-Hant", { numeric: true });
+    return sortDir === "asc" ? cmp : -cmp;
+  };
+
+  const toggleSort = (col) => {
+    if (sortBy === col) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(col); setSortDir("asc");
+    }
+  };
+
+  const sortIcon = (col) => sortBy === col ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+
+  // 預先算每個物件的應稅與免稅金額
   const enriched = data.properties
     .map(p => {
       const r = computeRentalIncome([p], params);
       return { ...p, computed: r.breakdown[0] };
     })
-    .sort((a, b) => String(a.serial || "").localeCompare(String(b.serial || "")));
+    .sort(sortFn);
 
   return (
     <div className="fade-in">
       <PageHeader
         ornament="§ RENTAL PROPERTIES · 出租物件"
         title="租賃物件樣板"
-        subtitle="此處只是物件「樣板」(預設值),實際每年租金請到「本年度試算」的⑤租賃紀錄編輯"
+        subtitle="物件儲存基本資料,實際合約到「租賃合約」頁編輯,稅務試算到「本年度試算」"
         right={
-          <button className="btn-primary text-sm" disabled={data.members.length === 0}
-            onClick={() => setEditing({ ...blank })}>+ 新增物件</button>
+          <div className="space-x-2">
+            <button className="btn-secondary text-sm" onClick={() => setImporting(!importing)}>
+              ⛁ 匯入 / 匯出
+            </button>
+            <button className="btn-primary text-sm" disabled={data.members.length === 0}
+              onClick={() => setEditing({ ...blank })}>+ 新增物件</button>
+          </div>
         }
       />
+
+      {/* 匯入工具區 */}
+      {importing && (
+        <div className="card mb-5 p-5" style={{ background: "#fdfcf7", borderColor: "var(--accent)" }}>
+          <div className="ornament mb-3" style={{ color: "var(--accent-deep)" }}>BULK IMPORT / EXPORT · 批次匯入 / 匯出</div>
+          <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+            CSV 欄位: <code className="num">序號, 屋主, 地址, 備註</code>
+            <br />
+            ⓘ 「屋主」必須填家庭成員的姓名(精確比對),例:陳大年
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-secondary text-xs" onClick={handleDownloadTemplate}>
+              ↓ 下載範本
+            </button>
+            <input type="file" accept=".csv" ref={fileRef}
+              onChange={handleImportCSV} className="hidden" />
+            <button className="btn-primary text-xs"
+              onClick={() => fileRef.current?.click()}
+              disabled={data.members.length === 0}>
+              ↑ 上傳 CSV
+            </button>
+            <button className="btn-secondary text-xs" onClick={handleExportCSV}>
+              ↓ 匯出現有物件 CSV
+            </button>
+            <div className="flex-1"></div>
+            <button className="btn-danger text-xs" onClick={clearAll}>
+              ⚠ 全部清除 (物件 + 合約)
+            </button>
+          </div>
+          <div className="mt-3 p-3 rounded text-xs" style={{ background: "white", border: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+            <div className="font-medium mb-1">📋 從 Excel 製作 CSV 的方法</div>
+            <ol className="space-y-1 ml-4 list-decimal">
+              <li>Excel 開新檔,把資料貼進去,標題列照範本順序排好</li>
+              <li>檔案 → 另存新檔 → 選 <b>「CSV UTF-8 (逗號分隔)」</b>格式</li>
+              <li>回到本系統點「↑ 上傳 CSV」</li>
+            </ol>
+            <div className="mt-2" style={{ color: "var(--accent-deep)" }}>
+              💡 已存在的序號或地址會自動略過,可放心重複匯入
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 類型說明 */}
       <div className="grid grid-cols-4 gap-3 mb-6">
@@ -1776,7 +1975,7 @@ function PropertiesPage({ data, setData, year }) {
           <div className="text-4xl mb-3">▤</div>
           <div className="font-serif text-lg mb-1">尚無出租物件</div>
           <div className="text-sm">
-            {data.members.length === 0 ? "請先新增家庭成員,再來新增物件" : "點右上角「新增物件」開始"}
+            {data.members.length === 0 ? "請先新增家庭成員,再來新增物件" : "點右上角「新增物件」或「⛁ 匯入 / 匯出」開始"}
           </div>
         </div>
       ) : (
@@ -1784,9 +1983,13 @@ function PropertiesPage({ data, setData, year }) {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
-                <th className="text-left px-3 py-2 text-xs font-medium w-20" style={{ color: "var(--ink-mute)" }}>序號</th>
+                <th className="text-left px-3 py-2 text-xs font-medium w-20 cursor-pointer hover:underline"
+                  style={{ color: sortBy === "serial" ? "var(--accent-deep)" : "var(--ink-mute)" }}
+                  onClick={() => toggleSort("serial")}>序號{sortIcon("serial")}</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件 / 地址</th>
-                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
+                <th className="text-left px-3 py-2 text-xs font-medium cursor-pointer hover:underline"
+                  style={{ color: sortBy === "owner" ? "var(--accent-deep)" : "var(--ink-mute)" }}
+                  onClick={() => toggleSort("owner")}>屋主{sortIcon("owner")}</th>
                 <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>合約數</th>
                 <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>已建立紀錄年度</th>
                 <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
@@ -2007,6 +2210,17 @@ function findOrCreatePropertyByAddress(properties, address, ownerId, name) {
   return { property: newProp, isNew: true };
 }
 
+// CSV 下載 helper (加 BOM 讓 Excel 顯示中文正確)
+function downloadCSVHelper(filename, content) {
+  const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // 解析一個 boolean 欄位
 function parseBool(v) {
   const s = String(v || "").trim().toLowerCase();
@@ -2096,26 +2310,54 @@ function ContractsPage({ data, setData, year }) {
       try {
         const rows = parseCSV(ev.target.result);
         if (rows.length < 2) return alert("CSV 為空或只有標題列");
-        const headers = rows[0].map(h => h.trim());
-        const requiredIdx = {
-          serial: headers.findIndex(h => h.includes("序號") || h.toLowerCase() === "serial" || h.toLowerCase() === "no"),
-          owner: headers.findIndex(h => h.includes("屋主") || h.toLowerCase() === "owner"),
-          address: headers.findIndex(h => h.includes("地址") || h.toLowerCase() === "address"),
-          note: headers.findIndex(h => h.includes("備註") || h.toLowerCase() === "note"),
+        const headers = rows[0].map(h => String(h || "").trim());
+        // 標題欄位精確比對 (避免 "公益期間" 被當成 "序號")
+        const findCol = (...names) => {
+          for (const name of names) {
+            const i = headers.findIndex(h => h === name);
+            if (i >= 0) return i;
+          }
+          // 退而求其次: 包含關鍵字
+          for (const name of names) {
+            const i = headers.findIndex(h => h.includes(name));
+            if (i >= 0) return i;
+          }
+          return -1;
         };
-        if (requiredIdx.address < 0) return alert("找不到「地址」欄,請檢查 CSV 標題");
+        const requiredIdx = {
+          serial: findCol("序號", "編號", "no"),
+          owner: findCol("屋主", "所有人", "owner"),
+          address: findCol("地址", "address"),
+          note: findCol("備註", "note"),
+        };
+        // 除錯訊息: 標題與對應欄位
+        const debugInfo = `偵測到的欄位:\n${headers.map((h, i) =>
+          `[${i}] "${h}" → ${
+            i === requiredIdx.serial ? "序號" :
+            i === requiredIdx.owner ? "屋主" :
+            i === requiredIdx.address ? "地址" :
+            i === requiredIdx.note ? "備註" : "(忽略)"
+          }`).join("\n")}`;
+
+        if (requiredIdx.address < 0) {
+          return alert(`找不到「地址」欄。\n\n${debugInfo}`);
+        }
 
         const newProps = [];
         const skipped = [];
+        const ownerErrors = [];
         rows.slice(1).forEach((r, i) => {
           const address = (r[requiredIdx.address] || "").trim();
           if (!address) return;
           const serial = requiredIdx.serial >= 0 ? (r[requiredIdx.serial] || "").trim() : "";
-          // 找屋主 (支援用名字)
+          // 找屋主 - 精確比對名字 (不 fallback)
           const ownerName = requiredIdx.owner >= 0 ? (r[requiredIdx.owner] || "").trim() : "";
-          const owner = data.members.find(m => m.name === ownerName) || data.members[0];
+          const owner = data.members.find(m => m.name === ownerName);
           if (!owner) {
-            skipped.push(`第 ${i+2} 列: 找不到屋主 (請先建立家庭成員)`);
+            const ownerHint = data.members.length > 0
+              ? `家庭成員只有: ${data.members.map(m => m.name).join("、")}`
+              : "尚未建立家庭成員";
+            ownerErrors.push(`第 ${i+2} 列 (${serial || address}): 找不到屋主「${ownerName}」(${ownerHint})`);
             return;
           }
           // 檢查是否已存在 (依序號或地址)
@@ -2126,7 +2368,6 @@ function ContractsPage({ data, setData, year }) {
             skipped.push(`第 ${i+2} 列 (${serial || address}): 已存在,略過`);
             return;
           }
-          // 物件名稱自動生成 = 序號 + 地址 (有序號才加)
           const name = serial ? `${serial} ${address}` : address;
           newProps.push({
             id: uid(),
@@ -2139,10 +2380,21 @@ function ContractsPage({ data, setData, year }) {
             taxFreeReason: "",
           });
         });
-        if (newProps.length === 0 && skipped.length === 0) return alert("沒有可匯入的資料");
-        const msg = `成功匯入 ${newProps.length} 筆物件${skipped.length > 0 ? "\n\n略過:\n" + skipped.join("\n") : ""}`;
+
+        if (newProps.length === 0) {
+          let msg = "沒有匯入任何資料\n\n";
+          if (ownerErrors.length > 0) msg += `⚠ 屋主問題:\n${ownerErrors.join("\n")}\n\n`;
+          if (skipped.length > 0) msg += `⊘ 略過:\n${skipped.join("\n")}\n\n`;
+          msg += debugInfo;
+          return alert(msg);
+        }
+
+        let summary = `✓ 成功匯入 ${newProps.length} 筆物件`;
+        if (ownerErrors.length > 0) summary += `\n\n⚠ ${ownerErrors.length} 筆因屋主問題未匯入:\n${ownerErrors.join("\n")}`;
+        if (skipped.length > 0) summary += `\n\n⊘ ${skipped.length} 筆已存在略過:\n${skipped.join("\n")}`;
+
         setData({ ...data, properties: [...(data.properties || []), ...newProps] });
-        alert(msg);
+        alert(summary);
         e.target.value = "";
       } catch (err) {
         alert("匯入失敗: " + err.message);
@@ -2280,17 +2532,8 @@ function ContractsPage({ data, setData, year }) {
     reader.readAsText(file, "UTF-8");
   };
 
-  // === CSV 範本下載 ===
-  const downloadCSV = (filename, content) => {
-    // 加 BOM 讓 Excel 開檔顯示中文正確
-    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  // === CSV 範本下載 (用全域 downloadCSVHelper) ===
+  const downloadCSV = downloadCSVHelper;
 
   const remove = (id) => {
     if (!confirm("確定刪除此合約?")) return;
