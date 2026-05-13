@@ -1991,30 +1991,38 @@ function PropertiesPage({ data, setData, year }) {
                 <th className="text-left px-3 py-2 text-xs font-medium cursor-pointer hover:underline"
                   style={{ color: sortBy === "owner" ? "var(--accent-deep)" : "var(--ink-mute)" }}
                   onClick={() => toggleSort("owner")}>屋主{sortIcon("owner")}</th>
-                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>合約數</th>
-                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>已建立紀錄年度</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>最新一般合約</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>最新公益合約</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>備註</th>
                 <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
               </tr>
             </thead>
             <tbody>
               {enriched.map(p => {
                 const owner = data.members.find(m => m.id === p.ownerId);
-                const t = TYPES[p.type] || TYPES.general;
                 const myContracts = (data.contracts || []).filter(c => c.propertyId === p.id);
                 const generalContracts = myContracts.filter(c => !(c.contractType === "public" || c.isPublicLandlord))
                   .sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
                 const publicContracts = myContracts.filter(c => c.contractType === "public" || c.isPublicLandlord)
                   .sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
-                const contractCount = myContracts.length;
-                const yearsWithRecord = (data.rentalRecords || [])
-                  .filter(r => r.propertyId === p.id)
-                  .map(r => r.year)
-                  .sort();
+                const latestGeneral = generalContracts[0];
+                const latestPublic = publicContracts[0];
+
+                // 當年度是否有有效合約 (任一份合約涵蓋 year 內任一月)
+                const hasActiveThisYear = myContracts.some(c => {
+                  const s = parseRocDate(c.startDate), e = parseRocDate(c.endDate);
+                  return s && e && monthsInYear(s, e, year) > 0;
+                });
+
                 const isExpanded = expandedId === p.id;
+                // 列底色: 展開 → 強調色;當年度有合約 → 淡黃;無 → 白
+                const rowBg = isExpanded ? "var(--accent-soft)"
+                  : (hasActiveThisYear ? "#fef9ec" : "white");
+
                 return (
                   <React.Fragment key={p.id}>
                     <tr className="table-row cursor-pointer"
-                      style={{ background: isExpanded ? "var(--accent-soft)" : "transparent" }}
+                      style={{ background: rowBg }}
                       onClick={() => setExpandedId(isExpanded ? null : p.id)}>
                       <td className="px-3 py-3">
                         <span className="chevron text-xs mr-1" style={{ color: "var(--ink-mute)" }}>
@@ -2028,30 +2036,15 @@ function PropertiesPage({ data, setData, year }) {
                           <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address}</div>
                         )}
                       </td>
-                      <td className="px-3 py-3">{owner?.name || "—"}</td>
-                      <td className="px-3 py-3 text-center">
-                        {contractCount > 0 ? (
-                          <div className="flex gap-1 justify-center">
-                            {generalContracts.length > 0 && <span className="chip chip-amber text-[10px]">一般 {generalContracts.length}</span>}
-                            {publicContracts.length > 0 && <span className="chip chip-green text-[10px]">公益 {publicContracts.length}</span>}
-                          </div>
-                        ) : (
-                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
-                        )}
+                      <td className="px-3 py-3 text-xs">{owner?.name || "—"}</td>
+                      <td className="px-3 py-3">
+                        <LatestContractCell contract={latestGeneral} year={year} />
                       </td>
-                      <td className="px-3 py-3 text-center text-xs">
-                        {yearsWithRecord.length === 0 ? (
-                          <span style={{ color: "var(--ink-mute)" }}>{contractCount > 0 ? "依合約自動" : "無"}</span>
-                        ) : (
-                          <div className="flex gap-1 justify-center flex-wrap">
-                            {yearsWithRecord.map(y => {
-                              const rec = data.rentalRecords.find(r => r.propertyId === p.id && r.year === y);
-                              return <span key={y} className={`chip ${rec?.includeInFiling ? 'chip-green' : 'chip-amber'} text-[10px]`}>
-                                {y}{rec?.includeInFiling ? "" : " 不計入"}
-                              </span>;
-                            })}
-                          </div>
-                        )}
+                      <td className="px-3 py-3">
+                        <LatestContractCell contract={latestPublic} year={year} isPublic />
+                      </td>
+                      <td className="px-3 py-3 text-xs" style={{ color: "var(--ink-soft)", maxWidth: "180px" }}>
+                        {p.note || <span style={{ color: "var(--ink-mute)" }}>—</span>}
                       </td>
                       <td className="px-5 py-3 text-right space-x-1" onClick={e => e.stopPropagation()}>
                         <button className="btn-secondary text-xs" onClick={() => setEditing(p)}>編輯</button>
@@ -2060,7 +2053,7 @@ function PropertiesPage({ data, setData, year }) {
                     </tr>
                     {isExpanded && (
                       <tr>
-                        <td colSpan={6} className="p-0" style={{ background: "#fdfcf7", borderBottom: "1px solid var(--line)" }}>
+                        <td colSpan={7} className="p-0" style={{ background: "#fdfcf7", borderBottom: "1px solid var(--line)" }}>
                           <div className="p-4">
                             <div className="ornament mb-3" style={{ color: "var(--accent-deep)" }}>
                               CONTRACTS HISTORY · 此物件合約歷史
@@ -2112,6 +2105,33 @@ function PropertiesPage({ data, setData, year }) {
 // ============================================================
 // 合約歷史欄 (物件管理頁展開區的子元件)
 // ============================================================
+// 物件列表中「最新一般 / 最新公益合約」儲存格
+function LatestContractCell({ contract, year, isPublic }) {
+  if (!contract) {
+    return <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>;
+  }
+  const s = parseRocDate(contract.startDate);
+  const e = parseRocDate(contract.endDate);
+  const monthsThisYear = (s && e) ? monthsInYear(s, e, year) : 0;
+  const isActiveThisYear = monthsThisYear > 0;
+  return (
+    <div className="text-xs" style={{ color: isActiveThisYear ? "var(--ink)" : "var(--ink-mute)" }}>
+      <div className="font-medium">{contract.tenantName || "(未填租客)"}</div>
+      <div className="num text-[10px]" style={{ color: "var(--ink-mute)" }}>
+        {contract.startDate} ~ {contract.endDate}
+      </div>
+      <div className="flex items-center gap-1 mt-0.5">
+        <span className="num">月租 {fmt(contract.monthlyRent)}</span>
+        {isActiveThisYear && (
+          <span className={`chip ${isPublic ? "chip-green" : "chip-amber"} text-[9px] px-1 py-0`}>
+            {year}年 {monthsThisYear}月
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ContractHistoryColumn({ title, contracts, emptyText, chipClass, year }) {
   return (
     <div className="card p-3" style={{ background: "white" }}>
