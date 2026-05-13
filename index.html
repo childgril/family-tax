@@ -968,18 +968,64 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
   let publicRent = 0, generalRent = 0;
   let anyContractInYear = false;
 
-  propContracts.forEach(c => {
+  // 第一階段: 算每份合約該年度涵蓋哪些月份 (1-12)
+  // 公益優先: 先標記哪些月被公益佔用,一般合約若落在公益月則扣掉該月
+  const yearMonths = Array.from({ length: 12 }, (_, i) => i + 1); // [1..12]
+  const isPublicOf = (c) => c.contractType === "public" || (!c.contractType && c.isPublicLandlord);
+
+  const enriched = propContracts.map(c => {
     const start = parseRocDate(c.startDate);
     const end = parseRocDate(c.endDate);
-    if (!start || !end) return;
-    const months = monthsInYear(start, end, year);
-    if (months <= 0) return;
+    if (!start || !end) return null;
+    // 計算該合約在 year 內涵蓋的月份 (1-12 陣列)
+    const monthsCovered = yearMonths.filter(m => {
+      const yStart = year, yMonth = m;
+      // 該月的「起點」是 year/m/1, 用 ROC 表示
+      // 合約若涵蓋這個月任一日,視為涵蓋
+      // 簡化判定: start <= year/m/末日 AND end >= year/m/1
+      const monthStartJs = new Date(year + 1911, m - 1, 1);
+      const monthEndJs = new Date(year + 1911, m, 0); // 上月最後一天
+      const sJs = rocToDate(start), eJs = rocToDate(end);
+      return sJs <= monthEndJs && eJs >= monthStartJs;
+    });
+    return { contract: c, start, end, monthsCovered, isPublic: isPublicOf(c) };
+  }).filter(Boolean);
+
+  // 公益月集合
+  const publicMonthsSet = new Set();
+  enriched.forEach(e => {
+    if (e.isPublic) e.monthsCovered.forEach(m => publicMonthsSet.add(m));
+  });
+
+  enriched.forEach(({ contract: c, start, end, monthsCovered, isPublic }) => {
+    // 一般合約: 扣掉公益已佔的月份
+    const effectiveMonths = isPublic
+      ? monthsCovered
+      : monthsCovered.filter(m => !publicMonthsSet.has(m));
+
+    if (effectiveMonths.length === 0) {
+      // 一般合約被公益完全覆蓋,只當紀錄,不計稅
+      breakdown.push({
+        contractId: c.id,
+        tenantName: c.tenantName,
+        months: 0,
+        monthly: toNum(c.monthlyRent),
+        rent: 0,
+        isPublic,
+        period: `${formatRocDate(start)} ~ ${formatRocDate(end)}`,
+        overriddenByPublic: !isPublic,
+        note: "全期間被公益合約覆蓋,僅作紀錄",
+      });
+      return;
+    }
+
     anyContractInYear = true;
     const monthly = toNum(c.monthlyRent);
+    const months = effectiveMonths.length;
     const rent = monthly * months;
     totalRent += rent;
     totalMonths += months;
-    if (c.isPublicLandlord) publicRent += rent;
+    if (isPublic) publicRent += rent;
     else generalRent += rent;
     breakdown.push({
       contractId: c.id,
@@ -987,15 +1033,19 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
       months,
       monthly,
       rent,
-      isPublic: !!c.isPublicLandlord,
+      isPublic,
       period: `${formatRocDate(start)} ~ ${formatRocDate(end)}`,
+      effectiveMonths,
+      hasOverlapWithPublic: !isPublic && monthsCovered.length > effectiveMonths.length,
     });
   });
+
+  // 至少有一份合約有涵蓋到該年度
+  if (enriched.length > 0) anyContractInYear = true;
 
   const overrideKey = `${propertyId}_${year}`;
   const override = (manualOverrides || {})[overrideKey];
   const manualAnnualRent = override ? toNum(override.annualRent) : null;
-  // 手動覆寫採總額;若沒覆寫用自動計算的 totalRent
   const appliedAnnualRent = override ? manualAnnualRent : totalRent;
 
   return {
@@ -1978,18 +2028,25 @@ const PROPERTIES_CSV_SAMPLE = [
 // 合約 CSV 範本
 // ============================================================
 const CONTRACTS_CSV_HEADERS = [
-  "物件地址", "租客姓名", "電話", "租期起", "租期迄",
-  "月租", "管理費", "押金", "負責出租人", "公益出租",
-  "公益期間", "公益登記人", "備註"
+  "物件序號", "合約類型", "租客姓名", "電話", "租期起", "租期迄",
+  "月租", "管理費", "押金", "負責出租人", "備註"
 ];
 const CONTRACTS_CSV_SAMPLE = [
   CONTRACTS_CSV_HEADERS.join(","),
-  ["花蓮市延平街148巷2弄10號", "潘余萍", "0979-123120", "1140810", "1150810",
-    "5500", "600", "12000", "湯三姐", "是", "114/8/10~115/8/10", "潘余萍", ""].join(","),
-  ["花蓮市延平街148巷2弄10號2f-2", "王奕翔", "0931-218768", "1141123", "1141223",
-    "5500", "6500", "6500", "湯三姐", "", "", "", ""].join(","),
-  ["花蓮市民德四街19號", "凃乙甯", "0966-410133", "1150115", "1160114",
-    "13000", "0", "26000", "公司", "", "", "", "3層樓不同人"].join(","),
+  // 一般合約 + 公益出租平行存在 (相同物件、相同租客、不同金額/期間)
+  ["001", "一般", "潘余萍", "0979-123120", "1140810", "1150810",
+    "5500", "600", "12000", "湯三姐", "實際收的合約租金"].join(","),
+  ["001", "公益", "潘余萍", "0979-123120", "1140810", "1150810",
+    "5500", "0", "0", "湯三姐", "公益出租名冊登記"].join(","),
+  // 一般合約 (短租)
+  ["002", "一般", "王奕翔", "0931-218768", "1141123", "1141223",
+    "5500", "6500", "6500", "湯三姐", "短租 1 個月"].join(","),
+  // 歷史合約 (113 年的舊合約)
+  ["001", "一般", "湯阿姨", "0922-111222", "1130301", "1140228",
+    "5000", "600", "10000", "湯三姐", "上年度租客"].join(","),
+  // 民間合約 (無公益)
+  ["003", "一般", "凃乙甯", "0966-410133", "1150115", "1160114",
+    "13000", "0", "26000", "公司", "3層樓不同人"].join(","),
 ].join("\n");
 
 
@@ -2006,6 +2063,7 @@ function ContractsPage({ data, setData, year }) {
   const blank = {
     id: "",
     propertyId: data.properties[0]?.id || "",
+    contractType: "general", // general / public
     tenantName: "",
     tenantPhone: "",
     startDate: "",
@@ -2015,9 +2073,6 @@ function ContractsPage({ data, setData, year }) {
     deposit: "",
     landlordOwner: "",
     isPublicLandlord: false,
-    publicLandlordName: "",
-    publicLandlordAmount: "",
-    publicLandlordPeriod: "",
     note: "",
   };
 
@@ -2107,7 +2162,9 @@ function ContractsPage({ data, setData, year }) {
         if (rows.length < 2) return alert("CSV 為空或只有標題列");
         const headers = rows[0].map(h => h.trim());
         const idx = {
-          address: headers.findIndex(h => h.includes("物件") || h.includes("地址")),
+          serial: headers.findIndex(h => h.includes("序號") || h.toLowerCase() === "serial"),
+          address: headers.findIndex(h => (h.includes("物件") || h.includes("地址")) && !h.includes("序號")),
+          type: headers.findIndex(h => h.includes("類型") || h.includes("合約類型")),
           tenant: headers.findIndex(h => h.includes("租客") || h.includes("姓名")),
           phone: headers.findIndex(h => h.includes("電話")),
           start: headers.findIndex(h => h.includes("起")),
@@ -2116,25 +2173,23 @@ function ContractsPage({ data, setData, year }) {
           mgmt: headers.findIndex(h => h.includes("管理")),
           deposit: headers.findIndex(h => h.includes("押金")),
           owner: headers.findIndex(h => h.includes("負責") || h.includes("出租人")),
-          publicMark: headers.findIndex(h => h.includes("公益出租")),
-          publicPeriod: headers.findIndex(h => h.includes("公益期間") || h.includes("公益查詢")),
-          publicName: headers.findIndex(h => h.includes("公益") && h.includes("登記")),
           note: headers.findIndex(h => h.includes("備註")),
         };
-        if (idx.address < 0) return alert("找不到「物件地址」欄");
+        if (idx.serial < 0 && idx.address < 0) return alert("找不到「物件序號」或「物件地址」欄");
         if (idx.start < 0 || idx.end < 0) return alert("找不到「租期起 / 迄」欄");
         if (idx.rent < 0) return alert("找不到「月租」欄");
 
-        const newProps = [];      // 自動建立的新物件
+        const newProps = [];
         const newContracts = [];
         const warnings = [];
         const duplicates = [];
 
         rows.slice(1).forEach((r, i) => {
-          const address = (r[idx.address] || "").trim();
-          if (!address) return;
+          const serial = idx.serial >= 0 ? (r[idx.serial] || "").trim() : "";
+          const address = idx.address >= 0 ? (r[idx.address] || "").trim() : "";
+          if (!serial && !address) return;
 
-          // 找/建物件
+          // 找/建物件 — 序號優先,地址次之
           const ownerName = idx.owner >= 0 ? (r[idx.owner] || "").trim() : "";
           const ownerMember = data.members.find(m => m.name === ownerName);
           const fallbackOwnerId = ownerMember ? ownerMember.id : (data.members[0] && data.members[0].id);
@@ -2143,20 +2198,32 @@ function ContractsPage({ data, setData, year }) {
             return;
           }
           const allProps = [...(data.properties || []), ...newProps];
-          let prop = allProps.find(p =>
+          let prop = null;
+          if (serial) prop = allProps.find(p => p.serial === serial);
+          if (!prop && address) prop = allProps.find(p =>
             String(p.address || "").trim() === address || String(p.name || "").trim() === address);
           if (!prop) {
+            const finalAddress = address || `(序號 ${serial} 待補地址)`;
             prop = {
-              id: uid(), name: address.slice(0, 30), address, ownerId: fallbackOwnerId,
+              id: uid(),
+              serial,
+              name: serial ? `${serial} ${finalAddress}` : finalAddress,
+              address: finalAddress,
+              ownerId: fallbackOwnerId,
               type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43,
               note: "(從合約 CSV 自動建立)", taxFreeReason: "",
             };
             newProps.push(prop);
           }
 
+          // 合約類型: 一般 / 公益
+          const typeStr = idx.type >= 0 ? (r[idx.type] || "").trim() : "一般";
+          const isPublic = typeStr.includes("公益") || typeStr.toLowerCase() === "public";
+
           const contract = {
             id: uid(),
             propertyId: prop.id,
+            contractType: isPublic ? "public" : "general",
             tenantName: idx.tenant >= 0 ? (r[idx.tenant] || "").trim() : "",
             tenantPhone: idx.phone >= 0 ? (r[idx.phone] || "").trim() : "",
             startDate: normalizeRocDateString(r[idx.start]),
@@ -2165,25 +2232,24 @@ function ContractsPage({ data, setData, year }) {
             managementFee: idx.mgmt >= 0 ? toNum(r[idx.mgmt]) : 0,
             deposit: idx.deposit >= 0 ? toNum(r[idx.deposit]) : 0,
             landlordOwner: ownerName,
-            isPublicLandlord: idx.publicMark >= 0 ? parseBool(r[idx.publicMark]) : false,
-            publicLandlordPeriod: idx.publicPeriod >= 0 ? (r[idx.publicPeriod] || "").trim() : "",
-            publicLandlordName: idx.publicName >= 0 ? (r[idx.publicName] || "").trim() : "",
-            publicLandlordAmount: "",
+            // 相容舊欄位
+            isPublicLandlord: isPublic,
             note: idx.note >= 0 ? (r[idx.note] || "").trim() : "",
           };
-          // 驗證日期可解析
+
           if (!parseRocDate(contract.startDate)) {
-            warnings.push(`第 ${i+2} 列 (${address}): 起日期格式不正確「${r[idx.start]}」,已照原樣存入,請進入合約手動修正`);
+            warnings.push(`第 ${i+2} 列 (${prop.name}): 起日期格式不正確「${r[idx.start]}」`);
           }
           if (!parseRocDate(contract.endDate)) {
-            warnings.push(`第 ${i+2} 列 (${address}): 迄日期格式不正確「${r[idx.end]}」`);
+            warnings.push(`第 ${i+2} 列 (${prop.name}): 迄日期格式不正確「${r[idx.end]}」`);
           }
-          // 重複檢查: 同物件 + 同租客 + 同租期起 + 同租期迄 → 略過
-          const dupKey = (c) => `${c.propertyId}|${(c.tenantName || "").trim()}|${c.startDate}|${c.endDate}`;
+
+          // 重複檢查: 同物件 + 同類型 + 同租客 + 同租期 → 略過
+          const dupKey = (c) => `${c.propertyId}|${c.contractType || (c.isPublicLandlord ? "public" : "general")}|${(c.tenantName || "").trim()}|${c.startDate}|${c.endDate}`;
           const currentKey = dupKey(contract);
           const isDup = [...(data.contracts || []), ...newContracts].some(c => dupKey(c) === currentKey);
           if (isDup) {
-            duplicates.push(`第 ${i+2} 列: ${address} · ${contract.tenantName} · ${contract.startDate}~${contract.endDate}`);
+            duplicates.push(`第 ${i+2} 列: ${prop.name} · ${typeStr} · ${contract.tenantName} · ${contract.startDate}~${contract.endDate}`);
             return;
           }
           newContracts.push(contract);
@@ -2195,8 +2261,8 @@ function ContractsPage({ data, setData, year }) {
 
         const summary = [
           `✓ 成功匯入 ${newContracts.length} 份合約`,
-          newProps.length > 0 ? `✓ 自動建立 ${newProps.length} 個物件 (依地址)` : "",
-          duplicates.length > 0 ? `\n⊘ 略過 ${duplicates.length} 筆重複資料 (同物件+同租客+同租期):\n${duplicates.join("\n")}` : "",
+          newProps.length > 0 ? `✓ 自動建立 ${newProps.length} 個物件` : "",
+          duplicates.length > 0 ? `\n⊘ 略過 ${duplicates.length} 筆重複 (同物件+同類型+同租客+同租期):\n${duplicates.join("\n")}` : "",
           warnings.length > 0 ? "\n⚠ 提醒:\n" + warnings.join("\n") : "",
         ].filter(Boolean).join("\n");
 
@@ -2372,10 +2438,20 @@ function ContractsPage({ data, setData, year }) {
               onClick={() => {
                 if ((data.contracts || []).length === 0) return alert("沒有合約可匯出");
                 const rows = [CONTRACTS_CSV_HEADERS.join(",")];
-                data.contracts.forEach(c => {
+                // 依物件序號 → 類型 → 起日排序
+                const sorted = [...data.contracts].sort((a, b) => {
+                  const pa = data.properties.find(x => x.id === a.propertyId);
+                  const pb = data.properties.find(x => x.id === b.propertyId);
+                  const sa = String(pa?.serial || ""), sb = String(pb?.serial || "");
+                  if (sa !== sb) return sa.localeCompare(sb);
+                  return String(a.startDate || "").localeCompare(String(b.startDate || ""));
+                });
+                sorted.forEach(c => {
                   const p = data.properties.find(x => x.id === c.propertyId);
+                  const typeLabel = (c.contractType === "public" || c.isPublicLandlord) ? "公益" : "一般";
                   rows.push([
-                    JSON.stringify(p?.address || p?.name || ""),
+                    JSON.stringify(p?.serial || ""),
+                    JSON.stringify(typeLabel),
                     JSON.stringify(c.tenantName || ""),
                     JSON.stringify(c.tenantPhone || ""),
                     JSON.stringify(c.startDate || ""),
@@ -2384,9 +2460,6 @@ function ContractsPage({ data, setData, year }) {
                     JSON.stringify(c.managementFee || 0),
                     JSON.stringify(c.deposit || 0),
                     JSON.stringify(c.landlordOwner || ""),
-                    JSON.stringify(c.isPublicLandlord ? "是" : ""),
-                    JSON.stringify(c.publicLandlordPeriod || ""),
-                    JSON.stringify(c.publicLandlordName || ""),
                     JSON.stringify(c.note || "")
                   ].join(","));
                 });
@@ -2439,8 +2512,8 @@ function ContractsPage({ data, setData, year }) {
                     <td className="px-3 py-2 text-right num text-xs" style={{ color: "var(--ink-mute)" }}>{fmt(c.managementFee)}</td>
                     <td className="px-3 py-2 text-right num text-xs" style={{ color: "var(--ink-mute)" }}>{fmt(c.deposit)}</td>
                     <td className="px-3 py-2 text-center">
-                      {c.isPublicLandlord ?
-                        <span className="chip chip-green text-[10px]">公益出租</span> :
+                      {(c.contractType === "public" || c.isPublicLandlord) ?
+                        <span className="chip chip-green text-[10px]">公益</span> :
                         <span className="chip chip-amber text-[10px]">一般</span>}
                     </td>
                     <td className="px-3 py-2 text-right num text-xs font-medium" style={{ color: calc.thisYear > 0 ? "var(--accent-deep)" : "var(--ink-mute)" }}>
@@ -2484,7 +2557,12 @@ function ContractsPage({ data, setData, year }) {
 }
 
 function ContractModal({ contract, properties, members, onSave, onClose }) {
-  const [c, setC] = useState({ ...contract });
+  // 初始化 contractType (向後相容: 舊資料的 isPublicLandlord=true → 設為 public)
+  const initial = { ...contract };
+  if (!initial.contractType) {
+    initial.contractType = initial.isPublicLandlord ? "public" : "general";
+  }
+  const [c, setC] = useState(initial);
 
   // 預覽: 全合約總額 / 各年度攤分
   const preview = (() => {
@@ -2496,7 +2574,6 @@ function ContractModal({ contract, properties, members, onSave, onClose }) {
     if (totalMonths <= 0) return null;
     const monthly = toNum(c.monthlyRent);
     const total = monthly * totalMonths;
-    // 列出涵蓋的所有年度
     const years = [];
     for (let y = s.y; y <= e.y; y++) {
       const m = monthsInYear(s, e, y);
@@ -2505,6 +2582,8 @@ function ContractModal({ contract, properties, members, onSave, onClose }) {
     return { totalMonths, total, years };
   })();
 
+  const isPublic = c.contractType === "public";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(26,29,35,0.4)" }} onClick={onClose}>
       <div className="card w-[680px] max-h-[90vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
@@ -2512,10 +2591,38 @@ function ContractModal({ contract, properties, members, onSave, onClose }) {
         <h2 className="font-serif text-xl mb-4">{c.id ? "編輯合約" : "新增租賃合約"}</h2>
 
         <div className="space-y-3">
+          {/* 合約類型: 一般 vs 公益 */}
+          <Field label="合約類型" hint="同一物件可同時有「一般合約」+「公益出租」兩份合約獨立存在">
+            <div className="grid grid-cols-2 gap-2">
+              <label className={`p-3 rounded cursor-pointer border ${!isPublic ? "border-2" : ""}`}
+                style={{ borderColor: !isPublic ? "var(--accent)" : "var(--line)", background: !isPublic ? "var(--accent-soft)" : "white" }}>
+                <input type="radio" name="contractType" value="general"
+                  checked={!isPublic} onChange={() => setC({ ...c, contractType: "general", isPublicLandlord: false })}
+                  className="mr-2" />
+                <span className="text-sm font-medium">一般出租合約</span>
+                <div className="text-xs mt-1 ml-5" style={{ color: "var(--ink-mute)" }}>
+                  43% 必要費用,計入應稅租金所得
+                </div>
+              </label>
+              <label className={`p-3 rounded cursor-pointer border ${isPublic ? "border-2" : ""}`}
+                style={{ borderColor: isPublic ? "var(--green)" : "var(--line)", background: isPublic ? "var(--green-soft)" : "white" }}>
+                <input type="radio" name="contractType" value="public"
+                  checked={isPublic} onChange={() => setC({ ...c, contractType: "public", isPublicLandlord: true })}
+                  className="mr-2" />
+                <span className="text-sm font-medium">公益出租合約</span>
+                <div className="text-xs mt-1 ml-5" style={{ color: "var(--ink-mute)" }}>
+                  每月免稅 15,000,超出部分費用率 60%
+                </div>
+              </label>
+            </div>
+          </Field>
+
           <div className="grid grid-cols-2 gap-3">
             <Field label="物件">
               <select className="input-text-plain w-full" value={c.propertyId} onChange={e => setC({...c, propertyId: e.target.value})}>
-                {properties.map(p => <option key={p.id} value={p.id}>{p.name} {p.address && `(${p.address})`}</option>)}
+                {properties.map(p => <option key={p.id} value={p.id}>
+                  {p.serial && `${p.serial} · `}{p.name} {p.address && `(${p.address})`}
+                </option>)}
               </select>
             </Field>
             <Field label="負責出租人 (誰簽的)">
@@ -2533,16 +2640,16 @@ function ContractModal({ contract, properties, members, onSave, onClose }) {
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="租期起 (民國日期)" hint="格式:1140810 或 114/08/10">
+            <Field label={isPublic ? "公益期間起" : "租期起 (民國日期)"} hint="格式:1140810 或 114/08/10">
               <input className="input-text w-full" value={c.startDate} onChange={e => setC({...c, startDate: e.target.value})} placeholder="1140810" />
             </Field>
-            <Field label="租期迄" hint="同上格式">
+            <Field label={isPublic ? "公益期間迄" : "租期迄"} hint="同上格式">
               <input className="input-text w-full" value={c.endDate} onChange={e => setC({...c, endDate: e.target.value})} placeholder="1150810" />
             </Field>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <Field label="月租金">
+            <Field label={isPublic ? "公益登記月租 ★稅務以此計算" : "月租金"}>
               <input type="number" className="input-text w-full text-right" value={c.monthlyRent} onChange={e => setC({...c, monthlyRent: e.target.value})} />
             </Field>
             <Field label="管理費 (不計稅)">
@@ -2553,26 +2660,13 @@ function ContractModal({ contract, properties, members, onSave, onClose }) {
             </Field>
           </div>
 
-          {/* 公益出租區 */}
-          <div className="p-3 rounded" style={{ background: c.isPublicLandlord ? "var(--green-soft)" : "#fafaf6", border: `1px solid ${c.isPublicLandlord ? "var(--green)" : "var(--line)"}` }}>
-            <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
-              <input type="checkbox" checked={!!c.isPublicLandlord} onChange={e => setC({...c, isPublicLandlord: e.target.checked})} />
-              此合約屬於「公益出租人」(每月免稅 15,000,超出部分費用率 60%)
-            </label>
-            {c.isPublicLandlord && (
-              <div className="grid grid-cols-2 gap-3 mt-3">
-                <Field label="公益出租查詢期間 (備註用)">
-                  <input className="input-text-plain w-full" value={c.publicLandlordPeriod} onChange={e => setC({...c, publicLandlordPeriod: e.target.value})} placeholder="114/8/10~115/8/10" />
-                </Field>
-                <Field label="公益出租名冊登記人">
-                  <input className="input-text-plain w-full" value={c.publicLandlordName} onChange={e => setC({...c, publicLandlordName: e.target.value})} />
-                </Field>
-                <Field label="公益租金 (備註)" hint="實際稅務計算仍用上方月租金">
-                  <input type="number" className="input-text w-full text-right" value={c.publicLandlordAmount} onChange={e => setC({...c, publicLandlordAmount: e.target.value})} />
-                </Field>
-              </div>
-            )}
-          </div>
+          {isPublic && (
+            <div className="p-3 rounded text-xs" style={{ background: "var(--green-soft)", border: "1px solid var(--green)", color: "#3d5235" }}>
+              💡 <b>公益出租合約計算說明</b>:此合約上的「公益登記月租」會以公益出租人優惠計稅
+              (每月免稅 {fmt(15000)},超出部分必要費用 60%)。如果你跟同一租客同期間另有「一般合約」金額,
+              請另建一筆「一般合約」記錄實際收的金額(僅作為內部紀錄,稅務不重複計算)。
+            </div>
+          )}
 
           <Field label="備註">
             <input className="input-text-plain w-full" value={c.note} onChange={e => setC({...c, note: e.target.value})} placeholder="如:申請補貼、有續住未續簽等" />
@@ -3378,8 +3472,15 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                           </thead>
                           <tbody>
                             {agg.contracts.map(c => (
-                              <tr key={c.contractId} style={{ borderBottom: "1px solid var(--line-soft)" }}>
-                                <td className="px-2 py-1">{c.tenantName}</td>
+                              <tr key={c.contractId} style={{
+                                borderBottom: "1px solid var(--line-soft)",
+                                opacity: c.overriddenByPublic ? 0.5 : 1
+                              }}>
+                                <td className="px-2 py-1">
+                                  {c.tenantName}
+                                  {c.overriddenByPublic && <span className="ml-1 text-[9px]" style={{ color: "var(--ink-mute)" }}>(被公益覆蓋)</span>}
+                                  {c.hasOverlapWithPublic && <span className="ml-1 text-[9px]" style={{ color: "var(--gold)" }}>(部分扣除)</span>}
+                                </td>
                                 <td className="px-2 py-1 num text-[10px]">{c.period}</td>
                                 <td className="px-2 py-1 text-center num">{c.months}</td>
                                 <td className="px-2 py-1 text-right num">{fmt(c.monthly)}</td>
@@ -4711,32 +4812,46 @@ const SAMPLE_FAMILY = (() => {
     ],
     rentalRecords: [],
     contracts: [
-      // 中山北路套房 - 114 跨年合約 (114/3/1 ~ 115/2/28)
-      { id: uid(), propertyId: propIds[0], tenantName: "李志成", tenantPhone: "0912-345678",
+      // === 物件 001 中山北路 ===
+      // 114 跨年合約 (一般)
+      { id: uid(), propertyId: propIds[0], contractType: "general",
+        tenantName: "李志成", tenantPhone: "0912-345678",
         startDate: "1140301", endDate: "1150228",
         monthlyRent: 25000, managementFee: 0, deposit: 50000, landlordOwner: "陳大年",
-        isPublicLandlord: false, note: "" },
-      // 中山北路套房 - 上一份合約 (113/1/1 ~ 114/2/28,月租較低)
-      { id: uid(), propertyId: propIds[0], tenantName: "王小明", tenantPhone: "0922-111222",
+        isPublicLandlord: false, note: "114 年現任租客" },
+      // 113 歷史合約 (一般)
+      { id: uid(), propertyId: propIds[0], contractType: "general",
+        tenantName: "王小明", tenantPhone: "0922-111222",
         startDate: "1130101", endDate: "1140228",
         monthlyRent: 23000, managementFee: 0, deposit: 46000, landlordOwner: "陳大年",
-        isPublicLandlord: false, note: "" },
-      // 板橋公益宅 - 公益出租合約
-      { id: uid(), propertyId: propIds[1], tenantName: "林春雪", tenantPhone: "0987-654321",
+        isPublicLandlord: false, note: "113 年舊租客" },
+
+      // === 物件 002 板橋公益宅 - 公益 + 一般並存示範 ===
+      // 公益出租合約 (登記期間 114/6/1 ~ 115/5/31,公益登記月租 18,000)
+      { id: uid(), propertyId: propIds[1], contractType: "public",
+        tenantName: "林春雪", tenantPhone: "0987-654321",
         startDate: "1140601", endDate: "1150531",
         monthlyRent: 18000, managementFee: 0, deposit: 36000, landlordOwner: "陳大年",
-        isPublicLandlord: true, publicLandlordName: "林春雪", publicLandlordPeriod: "114/6/1~115/5/31",
-        note: "公益出租,符合定額免稅" },
-      // 台中西區雅房 - 一般合約
-      { id: uid(), propertyId: propIds[2], tenantName: "黃靖晧", tenantPhone: "0935-751841",
+        isPublicLandlord: true, note: "公益出租名冊登記" },
+      // 同物件同租客的「一般合約」(實際簽約期間較長,僅作紀錄)
+      { id: uid(), propertyId: propIds[1], contractType: "general",
+        tenantName: "林春雪", tenantPhone: "0987-654321",
+        startDate: "1140101", endDate: "1141231",
+        monthlyRent: 20000, managementFee: 1000, deposit: 40000, landlordOwner: "陳大年",
+        isPublicLandlord: false, note: "實際簽約金額 (僅紀錄,稅務以公益合約為主)" },
+
+      // === 物件 003 台中西區雅房 ===
+      { id: uid(), propertyId: propIds[2], contractType: "general",
+        tenantName: "黃靖晧", tenantPhone: "0935-751841",
         startDate: "1140605", endDate: "1160605",
         monthlyRent: 16000, managementFee: 1500, deposit: 32000, landlordOwner: "陳志明",
         isPublicLandlord: false, note: "2年合約" },
-      // 台中西區雅房 - 113 年上一份合約
-      { id: uid(), propertyId: propIds[2], tenantName: "黃銘崇", tenantPhone: "0931-218768",
+      // 113 歷史合約
+      { id: uid(), propertyId: propIds[2], contractType: "general",
+        tenantName: "黃銘崇", tenantPhone: "0931-218768",
         startDate: "1130105", endDate: "1140105",
         monthlyRent: 15000, managementFee: 1500, deposit: 30000, landlordOwner: "陳志明",
-        isPublicLandlord: false, note: "" },
+        isPublicLandlord: false, note: "113 年舊租客" },
     ],
     filings: [
       {
