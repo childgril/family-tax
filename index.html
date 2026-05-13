@@ -1713,6 +1713,7 @@ function PropertiesPage({ data, setData, year }) {
   const [importing, setImporting] = useState(false);
   const [sortBy, setSortBy] = useState("serial"); // serial / owner
   const [sortDir, setSortDir] = useState("asc"); // asc / desc
+  const [expandedId, setExpandedId] = useState(null); // 哪個物件被展開
   const fileRef = useRef(null);
   const params = TAX_PARAMS[year];
 
@@ -1999,49 +2000,94 @@ function PropertiesPage({ data, setData, year }) {
               {enriched.map(p => {
                 const owner = data.members.find(m => m.id === p.ownerId);
                 const t = TYPES[p.type] || TYPES.general;
-                const contractCount = (data.contracts || []).filter(c => c.propertyId === p.id).length;
+                const myContracts = (data.contracts || []).filter(c => c.propertyId === p.id);
+                const generalContracts = myContracts.filter(c => !(c.contractType === "public" || c.isPublicLandlord))
+                  .sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
+                const publicContracts = myContracts.filter(c => c.contractType === "public" || c.isPublicLandlord)
+                  .sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
+                const contractCount = myContracts.length;
                 const yearsWithRecord = (data.rentalRecords || [])
                   .filter(r => r.propertyId === p.id)
                   .map(r => r.year)
                   .sort();
+                const isExpanded = expandedId === p.id;
                 return (
-                  <tr key={p.id} className="table-row">
-                    <td className="px-3 py-3">
-                      <span className="num font-medium">{p.serial || "—"}</span>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="font-medium">{p.name || p.address || "(未命名)"}</div>
-                      {p.name !== p.address && p.address && (
-                        <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address}</div>
-                      )}
-                    </td>
-                    <td className="px-3 py-3">{owner?.name || "—"}</td>
-                    <td className="px-3 py-3 text-center">
-                      {contractCount > 0 ? (
-                        <span className="chip chip-accent text-xs">{contractCount} 份</span>
-                      ) : (
-                        <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-center text-xs">
-                      {yearsWithRecord.length === 0 ? (
-                        <span style={{ color: "var(--ink-mute)" }}>{contractCount > 0 ? "依合約自動" : "無"}</span>
-                      ) : (
-                        <div className="flex gap-1 justify-center flex-wrap">
-                          {yearsWithRecord.map(y => {
-                            const rec = data.rentalRecords.find(r => r.propertyId === p.id && r.year === y);
-                            return <span key={y} className={`chip ${rec?.includeInFiling ? 'chip-green' : 'chip-amber'} text-[10px]`}>
-                              {y}{rec?.includeInFiling ? "" : " 不計入"}
-                            </span>;
-                          })}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-right space-x-1">
-                      <button className="btn-secondary text-xs" onClick={() => setEditing(p)}>編輯</button>
-                      <button className="btn-danger text-xs" onClick={() => remove(p.id)}>刪除</button>
-                    </td>
-                  </tr>
+                  <React.Fragment key={p.id}>
+                    <tr className="table-row cursor-pointer"
+                      style={{ background: isExpanded ? "var(--accent-soft)" : "transparent" }}
+                      onClick={() => setExpandedId(isExpanded ? null : p.id)}>
+                      <td className="px-3 py-3">
+                        <span className="chevron text-xs mr-1" style={{ color: "var(--ink-mute)" }}>
+                          {isExpanded ? "▾" : "▸"}
+                        </span>
+                        <span className="num font-medium">{p.serial || "—"}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="font-medium">{p.name || p.address || "(未命名)"}</div>
+                        {p.name !== p.address && p.address && (
+                          <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-3">{owner?.name || "—"}</td>
+                      <td className="px-3 py-3 text-center">
+                        {contractCount > 0 ? (
+                          <div className="flex gap-1 justify-center">
+                            {generalContracts.length > 0 && <span className="chip chip-amber text-[10px]">一般 {generalContracts.length}</span>}
+                            {publicContracts.length > 0 && <span className="chip chip-green text-[10px]">公益 {publicContracts.length}</span>}
+                          </div>
+                        ) : (
+                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-center text-xs">
+                        {yearsWithRecord.length === 0 ? (
+                          <span style={{ color: "var(--ink-mute)" }}>{contractCount > 0 ? "依合約自動" : "無"}</span>
+                        ) : (
+                          <div className="flex gap-1 justify-center flex-wrap">
+                            {yearsWithRecord.map(y => {
+                              const rec = data.rentalRecords.find(r => r.propertyId === p.id && r.year === y);
+                              return <span key={y} className={`chip ${rec?.includeInFiling ? 'chip-green' : 'chip-amber'} text-[10px]`}>
+                                {y}{rec?.includeInFiling ? "" : " 不計入"}
+                              </span>;
+                            })}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-right space-x-1" onClick={e => e.stopPropagation()}>
+                        <button className="btn-secondary text-xs" onClick={() => setEditing(p)}>編輯</button>
+                        <button className="btn-danger text-xs" onClick={() => remove(p.id)}>刪除</button>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={6} className="p-0" style={{ background: "#fdfcf7", borderBottom: "1px solid var(--line)" }}>
+                          <div className="p-4">
+                            <div className="ornament mb-3" style={{ color: "var(--accent-deep)" }}>
+                              CONTRACTS HISTORY · 此物件合約歷史
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              {/* 左:一般合約 */}
+                              <ContractHistoryColumn
+                                title="一般合約"
+                                contracts={generalContracts}
+                                emptyText="(此物件尚無一般合約)"
+                                chipClass="chip-amber"
+                                year={year}
+                              />
+                              {/* 右:公益出租 */}
+                              <ContractHistoryColumn
+                                title="公益出租合約"
+                                contracts={publicContracts}
+                                emptyText="(此物件尚無公益出租合約)"
+                                chipClass="chip-green"
+                                year={year}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -2058,6 +2104,63 @@ function PropertiesPage({ data, setData, year }) {
           onSave={save}
           onClose={() => setEditing(null)}
         />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// 合約歷史欄 (物件管理頁展開區的子元件)
+// ============================================================
+function ContractHistoryColumn({ title, contracts, emptyText, chipClass, year }) {
+  return (
+    <div className="card p-3" style={{ background: "white" }}>
+      <div className="flex items-center justify-between mb-2 pb-2" style={{ borderBottom: "1px solid var(--line)" }}>
+        <span className={`chip ${chipClass} text-xs`}>{title}</span>
+        <span className="text-xs" style={{ color: "var(--ink-mute)" }}>共 {contracts.length} 份</span>
+      </div>
+      {contracts.length === 0 ? (
+        <div className="text-xs text-center py-4" style={{ color: "var(--ink-mute)" }}>{emptyText}</div>
+      ) : (
+        <div className="space-y-2">
+          {contracts.map(c => {
+            // 在當前 year 涵蓋的月數
+            const s = parseRocDate(c.startDate);
+            const e = parseRocDate(c.endDate);
+            const monthsThisYear = (s && e) ? monthsInYear(s, e, year) : 0;
+            // 合約總時長
+            const totalMonths = (s && e) ? (() => {
+              const sJs = rocToDate(s), eJs = rocToDate(e);
+              return (eJs.getFullYear() - sJs.getFullYear()) * 12 + (eJs.getMonth() - sJs.getMonth()) + 1;
+            })() : 0;
+            const isCurrent = monthsThisYear > 0;
+            return (
+              <div key={c.id} className="p-2 rounded text-xs" style={{
+                background: isCurrent ? "#fafaf6" : "white",
+                border: `1px solid ${isCurrent ? "var(--accent)" : "var(--line-soft)"}`,
+                opacity: isCurrent ? 1 : 0.7,
+              }}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-medium">{c.tenantName || "(未填租客)"}</span>
+                  {isCurrent && <span className="chip chip-accent text-[10px]">{year}年計入 {monthsThisYear}個月</span>}
+                </div>
+                <div className="num text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                  {c.startDate} ~ {c.endDate} {totalMonths > 0 && `(共${totalMonths}個月)`}
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span style={{ color: "var(--ink-mute)" }}>月租 <span className="num font-medium" style={{ color: "var(--ink)" }}>{fmt(c.monthlyRent)}</span></span>
+                  {c.landlordOwner && <span style={{ color: "var(--ink-mute)" }}>負責: {c.landlordOwner}</span>}
+                </div>
+                {c.tenantPhone && (
+                  <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>📞 {c.tenantPhone}</div>
+                )}
+                {c.note && (
+                  <div className="text-[10px] mt-1 italic" style={{ color: "var(--ink-mute)" }}>{c.note}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
