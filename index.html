@@ -333,21 +333,44 @@ function rocToDate(d) {
   if (!d) return null;
   return new Date(d.y + 1911, d.m - 1, d.d);
 }
-// 算兩個日期跨越某年的「月數」(部分月按整月算 — 與國稅局實務相符)
-// 例: 合約 114/8/10 ~ 115/8/10,在 114 年度跨 8/10 ~ 12/31 = 5 個月 (8,9,10,11,12)
-//     在 115 年度跨 1/1 ~ 8/10 = 8 個月 (1,2,3,4,5,6,7,8)
+// 算兩個日期跨越某年的「月數」(粗略整月算法 — 用於 UI 顯示參考)
 function monthsInYear(startROC, endROC, year) {
   if (!startROC || !endROC) return 0;
   const yearStart = { y: year, m: 1, d: 1 };
   const yearEnd = { y: year, m: 12, d: 31 };
   const sJs = rocToDate(startROC), eJs = rocToDate(endROC);
   const ysJs = rocToDate(yearStart), yeJs = rocToDate(yearEnd);
-  // 取重疊區間
   const ovStart = sJs > ysJs ? sJs : ysJs;
   const ovEnd = eJs < yeJs ? eJs : yeJs;
   if (ovStart > ovEnd) return 0;
-  // 月數 = (起到迄涵蓋的月份數)
   return (ovEnd.getFullYear() - ovStart.getFullYear()) * 12 + (ovEnd.getMonth() - ovStart.getMonth()) + 1;
+}
+
+// 算合約在某年度內,每個月的「有效天數」陣列 (長度 12,每元素 0~31)
+// 規則: 起始日 ≤ 該天 ≤ 結束日 = 有效;起始日含、結束日含
+// 重疊月份的合約交接,呼叫端會以「公益優先」或「先到先服務」處理
+function monthDaysInYear(startROC, endROC, year) {
+  const result = new Array(12).fill(0);
+  if (!startROC || !endROC) return result;
+  const sJs = rocToDate(startROC), eJs = rocToDate(endROC);
+  for (let m = 1; m <= 12; m++) {
+    const monthStart = new Date(year + 1911, m - 1, 1);
+    const monthEnd = new Date(year + 1911, m, 0); // 該月最後一天
+    const daysInMonth = monthEnd.getDate();
+    const ovStart = sJs > monthStart ? sJs : monthStart;
+    const ovEnd = eJs < monthEnd ? eJs : monthEnd;
+    if (ovStart > ovEnd) continue;
+    // 重疊天數 (含頭含尾)
+    const days = Math.round((ovEnd - ovStart) / 86400000) + 1;
+    result[m - 1] = days;
+  }
+  return result;
+}
+
+// 一個月的總天數
+function daysInMonth(year, monthIndex) {
+  // monthIndex: 1-12, year: ROC
+  return new Date(year + 1911, monthIndex, 0).getDate();
 }
 
 // ============================================================
@@ -958,58 +981,72 @@ const SAMPLE_DATA = {
 
 // 給定一個物件 + 年度,找出該年度的紀錄;若不存在則用物件預設值組成虛擬紀錄
 // ============================================================
-// 合約 → 年度租金聚合 (每份合約獨立稅務處理)
+// 合約 → 年度租金聚合 (天數精準計算,避免重疊月份被算兩次)
 // ============================================================
+// 計算邏輯:
+// 1. 每份合約算出該年度在每個月「實際佔用的天數」
+// 2. 公益合約優先:該月公益佔幾天,該月可用天數扣多少
+// 3. 一般合約只能用「該月剩餘天數」
+// 4. 月租 × (該月實際天數 / 該月總天數) = 該月攤分金額
 function aggregateContractsForYear(contracts, propertyId, year, manualOverrides) {
   const propContracts = (contracts || []).filter(c => c.propertyId === propertyId);
   const breakdown = [];
   let totalRent = 0;
-  let totalMonths = 0;
+  let totalEffectiveMonths = 0; // 以「等效月」表示 (天數 / 該月總天數)
   let publicRent = 0, generalRent = 0;
   let anyContractInYear = false;
 
-  // 第一階段: 算每份合約該年度涵蓋哪些月份 (1-12)
-  // 公益優先: 先標記哪些月被公益佔用,一般合約若落在公益月則扣掉該月
-  const yearMonths = Array.from({ length: 12 }, (_, i) => i + 1); // [1..12]
   const isPublicOf = (c) => c.contractType === "public" || (!c.contractType && c.isPublicLandlord);
 
+  // 第一階段: 每份合約算出每月的「原始佔用天數」
   const enriched = propContracts.map(c => {
     const start = parseRocDate(c.startDate);
     const end = parseRocDate(c.endDate);
     if (!start || !end) return null;
-    // 計算該合約在 year 內涵蓋的月份 (1-12 陣列)
-    const monthsCovered = yearMonths.filter(m => {
-      const yStart = year, yMonth = m;
-      // 該月的「起點」是 year/m/1, 用 ROC 表示
-      // 合約若涵蓋這個月任一日,視為涵蓋
-      // 簡化判定: start <= year/m/末日 AND end >= year/m/1
-      const monthStartJs = new Date(year + 1911, m - 1, 1);
-      const monthEndJs = new Date(year + 1911, m, 0); // 上月最後一天
-      const sJs = rocToDate(start), eJs = rocToDate(end);
-      return sJs <= monthEndJs && eJs >= monthStartJs;
-    });
-    return { contract: c, start, end, monthsCovered, isPublic: isPublicOf(c) };
+    const dayCounts = monthDaysInYear(start, end, year); // 長度 12 陣列
+    return { contract: c, start, end, dayCounts, isPublic: isPublicOf(c) };
   }).filter(Boolean);
 
-  // 公益月集合
-  const publicMonthsSet = new Set();
-  enriched.forEach(e => {
-    if (e.isPublic) e.monthsCovered.forEach(m => publicMonthsSet.add(m));
-  });
+  // 第二階段: 公益優先,逐月扣除已被公益佔用的天數
+  // 用一個「該月剩餘可用天數」追蹤,公益先取
+  const remainingDays = new Array(12);
+  for (let i = 0; i < 12; i++) remainingDays[i] = daysInMonth(year, i + 1);
 
-  enriched.forEach(({ contract: c, start, end, monthsCovered, isPublic }) => {
-    // 一般合約: 扣掉公益已佔的月份
-    const effectiveMonths = isPublic
-      ? monthsCovered
-      : monthsCovered.filter(m => !publicMonthsSet.has(m));
+  // 公益先處理 (兩份公益合約若同月重疊,先到先服務 — 按 startDate 排序)
+  const publicEnriched = enriched.filter(e => e.isPublic)
+    .sort((a, b) => String(a.contract.startDate).localeCompare(String(b.contract.startDate)));
+  const generalEnriched = enriched.filter(e => !e.isPublic)
+    .sort((a, b) => String(a.contract.startDate).localeCompare(String(b.contract.startDate)));
 
-    if (effectiveMonths.length === 0) {
-      // 一般合約被公益完全覆蓋,只當紀錄,不計稅
+  const processContract = (e) => {
+    const { contract: c, start, end, dayCounts, isPublic } = e;
+    const monthly = toNum(c.monthlyRent);
+    let effectiveMonths = 0;       // 累計等效月數
+    let effectiveDaysMap = [];     // 各月實際採用天數,給 UI
+    let rentSum = 0;
+    const monthsCoveredRaw = [];   // 原始涵蓋月份 (給 hasOverlapWithPublic 判定)
+
+    for (let m = 0; m < 12; m++) {
+      const want = dayCounts[m];
+      if (want === 0) continue;
+      monthsCoveredRaw.push(m + 1);
+      const totalDays = daysInMonth(year, m + 1);
+      const available = remainingDays[m];
+      const use = Math.min(want, available);
+      if (use <= 0) continue;
+      remainingDays[m] -= use;
+      const ratio = use / totalDays;
+      effectiveMonths += ratio;
+      rentSum += monthly * ratio;
+      effectiveDaysMap.push({ month: m + 1, days: use, totalDays, ratio });
+    }
+
+    if (effectiveMonths === 0) {
       breakdown.push({
         contractId: c.id,
         tenantName: c.tenantName,
         months: 0,
-        monthly: toNum(c.monthlyRent),
+        monthly,
         rent: 0,
         isPublic,
         period: `${formatRocDate(start)} ~ ${formatRocDate(end)}`,
@@ -1020,60 +1057,63 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
     }
 
     anyContractInYear = true;
-    const monthly = toNum(c.monthlyRent);
-    const months = effectiveMonths.length;
-    const rent = monthly * months;
-    totalRent += rent;
-    totalMonths += months;
-    if (isPublic) publicRent += rent;
-    else generalRent += rent;
+    // 四捨五入到整數元
+    rentSum = Math.round(rentSum);
+    totalRent += rentSum;
+    totalEffectiveMonths += effectiveMonths;
+    if (isPublic) publicRent += rentSum;
+    else generalRent += rentSum;
+
+    // 為了 UI 顯示用,以「等效月數」(四捨五入到 0.01) 表示
+    const monthsDisplay = Math.round(effectiveMonths * 100) / 100;
     breakdown.push({
       contractId: c.id,
       tenantName: c.tenantName,
-      months,
+      months: monthsDisplay,
       monthly,
-      rent,
+      rent: rentSum,
       isPublic,
       period: `${formatRocDate(start)} ~ ${formatRocDate(end)}`,
-      effectiveMonths,
-      hasOverlapWithPublic: !isPublic && monthsCovered.length > effectiveMonths.length,
+      effectiveDays: effectiveDaysMap,
+      hasOverlapWithPublic: !isPublic && monthsCoveredRaw.some(m => {
+        // 該月原本想用 dayCounts[m-1] 天,但實際採用少於該值
+        const want = dayCounts[m - 1];
+        const used = effectiveDaysMap.find(d => d.month === m)?.days || 0;
+        return used < want;
+      }),
     });
-  });
+  };
 
-  // 至少有一份合約有涵蓋到該年度
+  // 先處理公益,再處理一般
+  publicEnriched.forEach(processContract);
+  generalEnriched.forEach(processContract);
+
   if (enriched.length > 0) anyContractInYear = true;
 
   const overrideKey = `${propertyId}_${year}`;
   const override = (manualOverrides || {})[overrideKey] || {};
-  // 單欄手動覆寫: 全年總租金 (公益部分仍依合約自動算)
-  // 向後相容: 舊版的 generalAnnualRent / publicAnnualRent / annualRent 都會被視為「總額」
   let manualTotal = null;
   if (override.totalAnnualRent !== undefined) {
     manualTotal = toNum(override.totalAnnualRent);
   } else if (override.annualRent !== undefined) {
     manualTotal = toNum(override.annualRent);
   } else if (override.generalAnnualRent !== undefined || override.publicAnnualRent !== undefined) {
-    // 舊版雙欄 → 加總
     manualTotal = toNum(override.generalAnnualRent || 0) + toNum(override.publicAnnualRent || 0);
   }
 
-  // 公益部分: 依合約自動 (固定)
   const appliedPublicRent = publicRent;
-  // 一般部分:
-  //   有手動值: max(0, 總金額 - 公益)
-  //   無手動值: 依合約自動
   const appliedGeneralRent = manualTotal !== null
     ? Math.max(0, manualTotal - publicRent)
     : generalRent;
 
   return {
     contracts: breakdown,
-    totalMonths,
-    publicRent,           // 自動算出的公益部分
-    generalRent,          // 自動算出的一般部分
+    totalMonths: Math.round(totalEffectiveMonths * 100) / 100,
+    publicRent,
+    generalRent,
     computedAnnualRent: totalRent,
     manualOverride: manualTotal !== null,
-    manualTotal,          // 使用者輸入的全年總租金 (含公益)
+    manualTotal,
     manualIncludeInFiling: override.includeInFiling !== false,
     appliedPublicRent,
     appliedGeneralRent,
@@ -1108,7 +1148,7 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
           months: c.months,
           annualRentDirect: c.rent,
           expenseRatio: 0.43,
-          note: `公益出租 · ${c.period} · ${c.months}個月`,
+          note: `公益出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月`,
           _fromContract: true,
         });
       });
@@ -1147,7 +1187,7 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
             months: c.months,
             annualRentDirect: c.rent,
             expenseRatio: 0.43,
-            note: `一般出租 · ${c.period} · ${c.months}個月`,
+            note: `一般出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月`,
             _fromContract: true,
           });
         });
@@ -4008,7 +4048,9 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                                   {c.hasOverlapWithPublic && <span className="ml-1 text-[9px]" style={{ color: "var(--gold)" }}>(部分扣除)</span>}
                                 </td>
                                 <td className="px-2 py-1 num text-[10px]">{c.period}</td>
-                                <td className="px-2 py-1 text-center num">{c.months}</td>
+                                <td className="px-2 py-1 text-center num">{
+                                  Number.isInteger(c.months) ? c.months : c.months.toFixed(2)
+                                }</td>
                                 <td className="px-2 py-1 text-right num">{fmt(c.monthly)}</td>
                                 <td className="px-2 py-1 text-right num font-medium">{fmt(c.rent)}</td>
                                 <td className="px-2 py-1 text-center">
