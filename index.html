@@ -1847,11 +1847,119 @@ function PropertyModal({ property, members, types, params, onSave, onClose }) {
 }
 
 // ============================================================
+// CSV 解析 + 匯入工具
+// ============================================================
+function parseCSV(text) {
+  // 簡單 CSV 解析,支援 "..." 內含逗號與雙引號跳脫 ""
+  const lines = [];
+  let row = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { cur += ch; }
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ',') { row.push(cur); cur = ""; }
+      else if (ch === '\n') { row.push(cur); lines.push(row); row = []; cur = ""; }
+      else if (ch === '\r') { /* ignore */ }
+      else cur += ch;
+    }
+  }
+  if (cur.length > 0 || row.length > 0) { row.push(cur); lines.push(row); }
+  return lines.filter(r => r.some(c => c.trim() !== ""));
+}
+
+// 嘗試多種日期格式,回傳 ROC 7 碼字串 (例 "1140810")
+function normalizeRocDateString(s) {
+  if (!s) return "";
+  const str = String(s).trim();
+  if (!str) return "";
+  // 已是 7 碼
+  if (/^\d{7}$/.test(str)) return str;
+  // 民國 + 分隔符: "114/8/10" / "114-8-10" / "114.8.10"
+  let m = str.match(/^(\d{2,3})[\/\.\-年](\d{1,2})[\/\.\-月](\d{1,2})/);
+  if (m) {
+    return `${m[1].padStart(3, "0")}${m[2].padStart(2, "0")}${m[3].padStart(2, "0")}`;
+  }
+  // 西元: "2025/8/10" / "2025-08-10"
+  m = str.match(/^(20\d{2})[\/\.\-](\d{1,2})[\/\.\-](\d{1,2})/);
+  if (m) {
+    const roc = Number(m[1]) - 1911;
+    return `${String(roc).padStart(3, "0")}${m[2].padStart(2, "0")}${m[3].padStart(2, "0")}`;
+  }
+  return str; // 解析不出來,原樣回傳讓使用者編輯
+}
+
+// 由地址查現有物件,若無則建立新的並回傳
+function findOrCreatePropertyByAddress(properties, address, ownerId, name) {
+  const norm = (s) => String(s || "").trim();
+  const target = norm(address);
+  if (!target) return null;
+  const existing = properties.find(p => norm(p.address) === target || norm(p.name) === target);
+  if (existing) return { property: existing, isNew: false };
+  const newProp = {
+    id: uid(),
+    name: name || target.slice(0, 30),
+    address: target,
+    ownerId: ownerId || (properties[0] && properties[0].ownerId) || "",
+    type: "general",
+    monthlyRent: 0,
+    months: 12,
+    expenseRatio: 0.43,
+    note: "(從 CSV 匯入時自動建立)",
+    taxFreeReason: "",
+  };
+  return { property: newProp, isNew: true };
+}
+
+// 解析一個 boolean 欄位
+function parseBool(v) {
+  const s = String(v || "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "y" || s === "yes" || s === "v" || s === "✓" || s === "公益" || s === "公益出租";
+}
+
+// ============================================================
+// 出租物件 CSV 範本
+// ============================================================
+const PROPERTIES_CSV_HEADERS = ["物件名稱", "地址", "屋主", "備註"];
+const PROPERTIES_CSV_SAMPLE = [
+  PROPERTIES_CSV_HEADERS.join(","),
+  ["延平街 4F-3", "花蓮市延平街148巷2弄10號4f-3", "陳大年", ""].join(","),
+  ["民德四街 1F", "花蓮市民德四街19號", "陳大年", "3層樓不同人"].join(","),
+].join("\n");
+
+// ============================================================
+// 合約 CSV 範本
+// ============================================================
+const CONTRACTS_CSV_HEADERS = [
+  "物件地址", "租客姓名", "電話", "租期起", "租期迄",
+  "月租", "管理費", "押金", "負責出租人", "公益出租",
+  "公益期間", "公益登記人", "備註"
+];
+const CONTRACTS_CSV_SAMPLE = [
+  CONTRACTS_CSV_HEADERS.join(","),
+  ["花蓮市延平街148巷2弄10號", "潘余萍", "0979-123120", "1140810", "1150810",
+    "5500", "600", "12000", "湯三姐", "是", "114/8/10~115/8/10", "潘余萍", ""].join(","),
+  ["花蓮市延平街148巷2弄10號2f-2", "王奕翔", "0931-218768", "1141123", "1141223",
+    "5500", "6500", "6500", "湯三姐", "", "", "", ""].join(","),
+  ["花蓮市民德四街19號", "凃乙甯", "0966-410133", "1150115", "1160114",
+    "13000", "0", "26000", "公司", "", "", "", "3層樓不同人"].join(","),
+].join("\n");
+
+
+// ============================================================
 // 租賃合約管理
 // ============================================================
 function ContractsPage({ data, setData, year }) {
   const [editing, setEditing] = useState(null);
   const [filterProp, setFilterProp] = useState("all");
+  const [importing, setImporting] = useState(false);
+  const fileRefProperties = useRef(null);
+  const fileRefContracts = useRef(null);
 
   const blank = {
     id: "",
@@ -1880,6 +1988,195 @@ function ContractsPage({ data, setData, year }) {
     }
     setData({ ...data, contracts: next });
     setEditing(null);
+  };
+
+  // === CSV 匯入: 出租物件 ===
+  const importPropertiesCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const rows = parseCSV(ev.target.result);
+        if (rows.length < 2) return alert("CSV 為空或只有標題列");
+        const headers = rows[0].map(h => h.trim());
+        const requiredIdx = {
+          name: headers.findIndex(h => h.includes("物件") || h.toLowerCase() === "name"),
+          address: headers.findIndex(h => h.includes("地址") || h.toLowerCase() === "address"),
+          owner: headers.findIndex(h => h.includes("屋主") || h.toLowerCase() === "owner"),
+          note: headers.findIndex(h => h.includes("備註") || h.toLowerCase() === "note"),
+        };
+        if (requiredIdx.address < 0) return alert("找不到「地址」欄,請檢查 CSV 標題");
+
+        const newProps = [];
+        const skipped = [];
+        rows.slice(1).forEach((r, i) => {
+          const address = (r[requiredIdx.address] || "").trim();
+          if (!address) return;
+          // 找屋主 (支援用名字)
+          const ownerName = requiredIdx.owner >= 0 ? (r[requiredIdx.owner] || "").trim() : "";
+          const owner = data.members.find(m => m.name === ownerName) || data.members[0];
+          if (!owner) {
+            skipped.push(`第 ${i+2} 列: 找不到屋主 (請先建立家庭成員)`);
+            return;
+          }
+          // 檢查是否已存在
+          const existing = (data.properties || []).find(p =>
+            String(p.address || "").trim() === address || String(p.name || "").trim() === address);
+          if (existing) {
+            skipped.push(`第 ${i+2} 列 (${address}): 已存在,略過`);
+            return;
+          }
+          newProps.push({
+            id: uid(),
+            name: (requiredIdx.name >= 0 ? r[requiredIdx.name] : "") || address.slice(0, 30),
+            address,
+            ownerId: owner.id,
+            type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43,
+            note: requiredIdx.note >= 0 ? (r[requiredIdx.note] || "") : "",
+            taxFreeReason: "",
+          });
+        });
+        if (newProps.length === 0 && skipped.length === 0) return alert("沒有可匯入的資料");
+        const msg = `成功匯入 ${newProps.length} 筆物件${skipped.length > 0 ? "\n\n略過:\n" + skipped.join("\n") : ""}`;
+        setData({ ...data, properties: [...(data.properties || []), ...newProps] });
+        alert(msg);
+        e.target.value = "";
+      } catch (err) {
+        alert("匯入失敗: " + err.message);
+      }
+    };
+    reader.readAsText(file, "UTF-8");
+  };
+
+  // === CSV 匯入: 租賃合約 ===
+  const importContractsCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const rows = parseCSV(ev.target.result);
+        if (rows.length < 2) return alert("CSV 為空或只有標題列");
+        const headers = rows[0].map(h => h.trim());
+        const idx = {
+          address: headers.findIndex(h => h.includes("物件") || h.includes("地址")),
+          tenant: headers.findIndex(h => h.includes("租客") || h.includes("姓名")),
+          phone: headers.findIndex(h => h.includes("電話")),
+          start: headers.findIndex(h => h.includes("起")),
+          end: headers.findIndex(h => h.includes("迄")),
+          rent: headers.findIndex(h => h.includes("月租") || (h.includes("租") && h.includes("金") && !h.includes("管理"))),
+          mgmt: headers.findIndex(h => h.includes("管理")),
+          deposit: headers.findIndex(h => h.includes("押金")),
+          owner: headers.findIndex(h => h.includes("負責") || h.includes("出租人")),
+          publicMark: headers.findIndex(h => h.includes("公益出租")),
+          publicPeriod: headers.findIndex(h => h.includes("公益期間") || h.includes("公益查詢")),
+          publicName: headers.findIndex(h => h.includes("公益") && h.includes("登記")),
+          note: headers.findIndex(h => h.includes("備註")),
+        };
+        if (idx.address < 0) return alert("找不到「物件地址」欄");
+        if (idx.start < 0 || idx.end < 0) return alert("找不到「租期起 / 迄」欄");
+        if (idx.rent < 0) return alert("找不到「月租」欄");
+
+        const newProps = [];      // 自動建立的新物件
+        const newContracts = [];
+        const warnings = [];
+        const duplicates = [];
+
+        rows.slice(1).forEach((r, i) => {
+          const address = (r[idx.address] || "").trim();
+          if (!address) return;
+
+          // 找/建物件
+          const ownerName = idx.owner >= 0 ? (r[idx.owner] || "").trim() : "";
+          const ownerMember = data.members.find(m => m.name === ownerName);
+          const fallbackOwnerId = ownerMember ? ownerMember.id : (data.members[0] && data.members[0].id);
+          if (!fallbackOwnerId) {
+            warnings.push(`第 ${i+2} 列: 找不到任何成員,無法建立物件,略過`);
+            return;
+          }
+          const allProps = [...(data.properties || []), ...newProps];
+          let prop = allProps.find(p =>
+            String(p.address || "").trim() === address || String(p.name || "").trim() === address);
+          if (!prop) {
+            prop = {
+              id: uid(), name: address.slice(0, 30), address, ownerId: fallbackOwnerId,
+              type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43,
+              note: "(從合約 CSV 自動建立)", taxFreeReason: "",
+            };
+            newProps.push(prop);
+          }
+
+          const contract = {
+            id: uid(),
+            propertyId: prop.id,
+            tenantName: idx.tenant >= 0 ? (r[idx.tenant] || "").trim() : "",
+            tenantPhone: idx.phone >= 0 ? (r[idx.phone] || "").trim() : "",
+            startDate: normalizeRocDateString(r[idx.start]),
+            endDate: normalizeRocDateString(r[idx.end]),
+            monthlyRent: toNum(r[idx.rent]),
+            managementFee: idx.mgmt >= 0 ? toNum(r[idx.mgmt]) : 0,
+            deposit: idx.deposit >= 0 ? toNum(r[idx.deposit]) : 0,
+            landlordOwner: ownerName,
+            isPublicLandlord: idx.publicMark >= 0 ? parseBool(r[idx.publicMark]) : false,
+            publicLandlordPeriod: idx.publicPeriod >= 0 ? (r[idx.publicPeriod] || "").trim() : "",
+            publicLandlordName: idx.publicName >= 0 ? (r[idx.publicName] || "").trim() : "",
+            publicLandlordAmount: "",
+            note: idx.note >= 0 ? (r[idx.note] || "").trim() : "",
+          };
+          // 驗證日期可解析
+          if (!parseRocDate(contract.startDate)) {
+            warnings.push(`第 ${i+2} 列 (${address}): 起日期格式不正確「${r[idx.start]}」,已照原樣存入,請進入合約手動修正`);
+          }
+          if (!parseRocDate(contract.endDate)) {
+            warnings.push(`第 ${i+2} 列 (${address}): 迄日期格式不正確「${r[idx.end]}」`);
+          }
+          // 重複檢查: 同物件 + 同租客 + 同租期起 + 同租期迄 → 略過
+          const dupKey = (c) => `${c.propertyId}|${(c.tenantName || "").trim()}|${c.startDate}|${c.endDate}`;
+          const currentKey = dupKey(contract);
+          const isDup = [...(data.contracts || []), ...newContracts].some(c => dupKey(c) === currentKey);
+          if (isDup) {
+            duplicates.push(`第 ${i+2} 列: ${address} · ${contract.tenantName} · ${contract.startDate}~${contract.endDate}`);
+            return;
+          }
+          newContracts.push(contract);
+        });
+
+        if (newContracts.length === 0 && duplicates.length === 0) {
+          return alert("沒有可匯入的合約\n\n" + warnings.join("\n"));
+        }
+
+        const summary = [
+          `✓ 成功匯入 ${newContracts.length} 份合約`,
+          newProps.length > 0 ? `✓ 自動建立 ${newProps.length} 個物件 (依地址)` : "",
+          duplicates.length > 0 ? `\n⊘ 略過 ${duplicates.length} 筆重複資料 (同物件+同租客+同租期):\n${duplicates.join("\n")}` : "",
+          warnings.length > 0 ? "\n⚠ 提醒:\n" + warnings.join("\n") : "",
+        ].filter(Boolean).join("\n");
+
+        setData({
+          ...data,
+          properties: [...(data.properties || []), ...newProps],
+          contracts: [...(data.contracts || []), ...newContracts],
+        });
+        alert(summary);
+        e.target.value = "";
+      } catch (err) {
+        alert("匯入失敗: " + err.message);
+      }
+    };
+    reader.readAsText(file, "UTF-8");
+  };
+
+  // === CSV 範本下載 ===
+  const downloadCSV = (filename, content) => {
+    // 加 BOM 讓 Excel 開檔顯示中文正確
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const remove = (id) => {
@@ -1917,22 +2214,146 @@ function ContractsPage({ data, setData, year }) {
         subtitle={`所有租賃合約。系統會依「起迄日期 × 月租金」自動攤分到各年度,目前顯示 ${year} 年度試算結果`}
         right={
           <div className="space-x-2">
+            <button className="btn-secondary text-sm" onClick={() => setImporting(!importing)}>
+              ⛁ 匯入 / 匯出
+            </button>
             <select className="input-text-plain text-sm" value={filterProp} onChange={e => setFilterProp(e.target.value)}>
               <option value="all">全部物件</option>
               {data.properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
-            <button className="btn-primary text-sm" disabled={data.properties.length === 0}
+            <button className="btn-primary text-sm" disabled={data.members.length === 0}
               onClick={() => setEditing({ ...blank })}>+ 新增合約</button>
           </div>
         }
       />
+
+      {/* 匯入工具區 */}
+      {importing && (
+        <div className="card mb-5 p-5" style={{ background: "#fdfcf7", borderColor: "var(--accent)" }}>
+          <div className="ornament mb-3" style={{ color: "var(--accent-deep)" }}>BULK IMPORT · 批次匯入</div>
+          <div className="grid grid-cols-2 gap-5">
+            {/* 物件 CSV */}
+            <div>
+              <div className="font-medium text-sm mb-2">① 匯入出租物件</div>
+              <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+                CSV 欄位: <code className="num">物件名稱, 地址, 屋主, 備註</code>
+              </div>
+              <div className="flex gap-2">
+                <button className="btn-secondary text-xs"
+                  onClick={() => downloadCSV("物件範本.csv", PROPERTIES_CSV_SAMPLE)}>
+                  ↓ 下載範本
+                </button>
+                <input type="file" accept=".csv" ref={fileRefProperties}
+                  onChange={importPropertiesCSV} className="hidden" />
+                <button className="btn-primary text-xs"
+                  onClick={() => fileRefProperties.current?.click()}
+                  disabled={data.members.length === 0}>
+                  ↑ 上傳 CSV
+                </button>
+              </div>
+              <div className="text-[10px] mt-2" style={{ color: "var(--ink-mute)" }}>
+                ⓘ「屋主」欄請填家庭成員的姓名 (例:陳大年);找不到時用第一個成員
+              </div>
+            </div>
+
+            {/* 合約 CSV */}
+            <div>
+              <div className="font-medium text-sm mb-2">② 匯入租賃合約</div>
+              <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+                CSV 欄位: <code className="num text-[10px]">物件地址, 租客姓名, 電話, 租期起, 租期迄, 月租, 管理費, 押金, 負責出租人, 公益出租, 公益期間, 公益登記人, 備註</code>
+              </div>
+              <div className="flex gap-2">
+                <button className="btn-secondary text-xs"
+                  onClick={() => downloadCSV("合約範本.csv", CONTRACTS_CSV_SAMPLE)}>
+                  ↓ 下載範本
+                </button>
+                <input type="file" accept=".csv" ref={fileRefContracts}
+                  onChange={importContractsCSV} className="hidden" />
+                <button className="btn-primary text-xs"
+                  onClick={() => fileRefContracts.current?.click()}
+                  disabled={data.members.length === 0}>
+                  ↑ 上傳 CSV
+                </button>
+              </div>
+              <div className="text-[10px] mt-2" style={{ color: "var(--ink-mute)" }}>
+                ⓘ 公益出租欄填 <b>是 / Y / 1 / 公益</b> 都算是;空白為一般合約
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 p-3 rounded text-xs" style={{ background: "white", border: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+            <div className="font-medium mb-1">📋 從 Excel 製作 CSV 的方法</div>
+            <div className="space-y-1">
+              <div>1. 在 Excel 開新檔,把資料貼進去,標題列照範本順序排好</div>
+              <div>2. 檔案 → 另存新檔 → 選 <b>「CSV UTF-8 (逗號分隔)」</b>格式</div>
+              <div>3. 回到本系統點「↑ 上傳 CSV」</div>
+              <div className="mt-2" style={{ color: "var(--accent-deep)" }}>
+                💡 <b>地址匹配規則</b>:CSV 裡「物件地址」會自動找已存在的物件;若沒找到,系統會自動建立新物件 (以該地址當名稱)。
+              </div>
+              <div style={{ color: "var(--accent-deep)" }}>
+                💡 <b>日期格式</b>:支援 <code className="num">1140810</code> / <code className="num">114/8/10</code> / <code className="num">2025/8/10</code> 三種寫法。
+              </div>
+            </div>
+          </div>
+
+          {/* 匯出按鈕 */}
+          <div className="mt-4 pt-3 flex gap-2" style={{ borderTop: "1px solid var(--line)" }}>
+            <div className="text-xs flex-1" style={{ color: "var(--ink-soft)" }}>
+              將現有資料匯出為 CSV,方便在 Excel 中編輯後再匯入:
+            </div>
+            <button className="btn-secondary text-xs"
+              onClick={() => {
+                if ((data.properties || []).length === 0) return alert("沒有物件可匯出");
+                const rows = [PROPERTIES_CSV_HEADERS.join(",")];
+                data.properties.forEach(p => {
+                  const owner = data.members.find(m => m.id === p.ownerId);
+                  rows.push([
+                    JSON.stringify(p.name || ""),
+                    JSON.stringify(p.address || ""),
+                    JSON.stringify(owner?.name || ""),
+                    JSON.stringify(p.note || "")
+                  ].join(","));
+                });
+                downloadCSV(`物件_${new Date().toISOString().slice(0,10)}.csv`, rows.join("\n"));
+              }}>
+              ↓ 匯出物件 CSV
+            </button>
+            <button className="btn-secondary text-xs"
+              onClick={() => {
+                if ((data.contracts || []).length === 0) return alert("沒有合約可匯出");
+                const rows = [CONTRACTS_CSV_HEADERS.join(",")];
+                data.contracts.forEach(c => {
+                  const p = data.properties.find(x => x.id === c.propertyId);
+                  rows.push([
+                    JSON.stringify(p?.address || p?.name || ""),
+                    JSON.stringify(c.tenantName || ""),
+                    JSON.stringify(c.tenantPhone || ""),
+                    JSON.stringify(c.startDate || ""),
+                    JSON.stringify(c.endDate || ""),
+                    JSON.stringify(c.monthlyRent || 0),
+                    JSON.stringify(c.managementFee || 0),
+                    JSON.stringify(c.deposit || 0),
+                    JSON.stringify(c.landlordOwner || ""),
+                    JSON.stringify(c.isPublicLandlord ? "是" : ""),
+                    JSON.stringify(c.publicLandlordPeriod || ""),
+                    JSON.stringify(c.publicLandlordName || ""),
+                    JSON.stringify(c.note || "")
+                  ].join(","));
+                });
+                downloadCSV(`合約_${new Date().toISOString().slice(0,10)}.csv`, rows.join("\n"));
+              }}>
+              ↓ 匯出合約 CSV
+            </button>
+          </div>
+        </div>
+      )}
 
       {(data.contracts || []).length === 0 ? (
         <div className="card p-12 text-center" style={{ color: "var(--ink-mute)" }}>
           <div className="text-4xl mb-3">▦</div>
           <div className="font-serif text-lg mb-1">尚無合約資料</div>
           <div className="text-sm">
-            {data.properties.length === 0 ? "請先新增出租物件,再來新增合約" : "點右上角「新增合約」開始"}
+            {data.members.length === 0 ? "請先建立家庭成員" : "點右上角「新增合約」或「匯入 / 匯出」批次上傳"}
           </div>
         </div>
       ) : (
