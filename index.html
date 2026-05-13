@@ -2047,9 +2047,10 @@ function PropertiesPage({ data, setData, year }) {
                   style={{ color: sortBy === "owner" ? "var(--accent-deep)" : "var(--ink-mute)" }}
                   onClick={() => toggleSort("owner")}>屋主{sortIcon("owner")}</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件 / 地址</th>
-                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>最新一般合約</th>
-                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>最新公益合約</th>
-                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>預計報稅方式</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>{year} 年度合約 (一般)</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>{year} 年度合約 (公益)</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>月份覆蓋</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>報稅方式</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>備註</th>
                 <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
               </tr>
@@ -2058,26 +2059,41 @@ function PropertiesPage({ data, setData, year }) {
               {enriched.map(p => {
                 const owner = data.members.find(m => m.id === p.ownerId);
                 const myContracts = (data.contracts || []).filter(c => c.propertyId === p.id);
-                const generalContracts = myContracts.filter(c => !(c.contractType === "public" || c.isPublicLandlord))
-                  .sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
-                const publicContracts = myContracts.filter(c => c.contractType === "public" || c.isPublicLandlord)
-                  .sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
-                const latestGeneral = generalContracts[0];
-                const latestPublic = publicContracts[0];
 
-                // 計算當年度公益月份覆蓋情形 (PropertiesPage 不依賴申報戶設定,只看合約本身)
+                // 計算當年度公益月份覆蓋情形
                 const agg = aggregateContractsForYear(data.contracts || [], p.id, year, {});
-                // 從 agg 拿生效資訊: 公益總月數 + 一般生效月數 (扣除被公益覆蓋)
+
+                // 該年度有效的合約 (有月份涵蓋)
+                const yearGenerals = agg.contracts.filter(c => !c.isPublic && c.months > 0)
+                  .sort((a, b) => String(a.period).localeCompare(String(b.period)));
+                const yearPublics = agg.contracts.filter(c => c.isPublic && c.months > 0)
+                  .sort((a, b) => String(a.period).localeCompare(String(b.period)));
+
+                // 算每個月被誰覆蓋 (1-12)
+                // coverage[i] = "public" | "general" | "none"
+                const coverage = new Array(12).fill("none");
+                agg.contracts.forEach(c => {
+                  if (c.effectiveDays) {
+                    c.effectiveDays.forEach(d => {
+                      // 該月使用比例 >= 50% 才算「主要」
+                      // 同月若同時有公益與一般,公益優先 (已在 agg 處理)
+                      if (d.use > 0) {
+                        if (c.isPublic) coverage[d.month - 1] = "public";
+                        else if (coverage[d.month - 1] === "none") coverage[d.month - 1] = "general";
+                      }
+                    });
+                  }
+                });
+
+                const missingMonths = coverage.map((c, i) => c === "none" ? i + 1 : null).filter(Boolean);
+                const totalCoveredMonths = coverage.filter(c => c !== "none").length;
+
                 const publicMonths = agg.contracts.filter(c => c.isPublic).reduce((s, c) => s + c.months, 0);
                 const generalEffectiveMonths = agg.contracts
                   .filter(c => !c.isPublic && !c.overriddenByPublic)
                   .reduce((s, c) => s + c.months, 0);
                 const hasActiveThisYear = agg.anyContractInYear;
 
-                // 預計報稅方式:
-                //   公益月數 = 0 + 一般生效月數 > 0  →  「一般」
-                //   公益月數 > 0 + 一般生效月數 > 0  →  「一般 + 公益」(公益期間外仍有一般)
-                //   公益月數 > 0 + 一般生效月數 = 0  →  「公益」(整年都被公益覆蓋,或沒有任何一般合約)
                 let filingType, filingChip;
                 if (publicMonths > 0 && generalEffectiveMonths > 0) {
                   filingType = "一般 + 公益"; filingChip = "chip-accent";
@@ -2098,43 +2114,46 @@ function PropertiesPage({ data, setData, year }) {
                     <tr className="table-row cursor-pointer"
                       style={{ background: rowBg }}
                       onClick={() => setExpandedId(isExpanded ? null : p.id)}>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-3 align-top">
                         <span className="chevron text-xs mr-1" style={{ color: "var(--ink-mute)" }}>
                           {isExpanded ? "▾" : "▸"}
                         </span>
                         <span className="num font-medium">{p.serial || "—"}</span>
                       </td>
-                      <td className="px-3 py-3 text-xs">{owner?.name || "—"}</td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-3 text-xs align-top">{owner?.name || "—"}</td>
+                      <td className="px-3 py-3 align-top">
                         <div className="font-medium">{p.name || p.address || "(未命名)"}</div>
                         {p.name !== p.address && p.address && (
                           <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address}</div>
                         )}
                       </td>
-                      <td className="px-3 py-3">
-                        <LatestContractCell contract={latestGeneral} year={year} />
+                      <td className="px-3 py-3 align-top">
+                        <YearContractsCell contracts={yearGenerals} chipClass="chip-amber" />
                       </td>
-                      <td className="px-3 py-3">
-                        <LatestContractCell contract={latestPublic} year={year} isPublic />
+                      <td className="px-3 py-3 align-top">
+                        <YearContractsCell contracts={yearPublics} chipClass="chip-green" isPublic />
                       </td>
-                      <td className="px-3 py-3 text-center">
+                      <td className="px-3 py-3 align-top">
+                        <MonthCoverageBar coverage={coverage} missingMonths={missingMonths} hasContracts={hasActiveThisYear} />
+                      </td>
+                      <td className="px-3 py-3 text-center align-top">
                         {filingChip ? (
                           <span className={`chip ${filingChip} text-[10px]`}>{filingType}</span>
                         ) : (
                           <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-xs" style={{ color: "var(--ink-soft)", maxWidth: "180px" }}>
+                      <td className="px-3 py-3 text-xs align-top" style={{ color: "var(--ink-soft)", maxWidth: "140px" }}>
                         {p.note || <span style={{ color: "var(--ink-mute)" }}>—</span>}
                       </td>
-                      <td className="px-5 py-3 text-right space-x-1" onClick={e => e.stopPropagation()}>
+                      <td className="px-5 py-3 text-right space-x-1 align-top" onClick={e => e.stopPropagation()}>
                         <button className="btn-secondary text-xs" onClick={() => setEditing(p)}>編輯</button>
                         <button className="btn-danger text-xs" onClick={() => remove(p.id)}>刪除</button>
                       </td>
                     </tr>
                     {isExpanded && (
                       <tr>
-                        <td colSpan={8} className="p-0" style={{ background: "#fdfcf7", borderBottom: "1px solid var(--line)" }}>
+                        <td colSpan={9} className="p-0" style={{ background: "#fdfcf7", borderBottom: "1px solid var(--line)" }}>
                           <div className="p-4">
                             <div className="ornament mb-3" style={{ color: "var(--accent-deep)" }}>
                               CONTRACTS HISTORY · 此物件合約歷史
@@ -2187,6 +2206,75 @@ function PropertiesPage({ data, setData, year }) {
 // 合約歷史欄 (物件管理頁展開區的子元件)
 // ============================================================
 // 物件列表中「最新一般 / 最新公益合約」儲存格
+// 顯示某物件「該年度的所有有效合約」清單 (一份合約一行)
+// contracts: aggregateContractsForYear() 回傳的 breakdown (篩過 isPublic 且 months > 0)
+function YearContractsCell({ contracts, chipClass, isPublic }) {
+  if (!contracts || contracts.length === 0) {
+    return <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>;
+  }
+  return (
+    <div className="space-y-1">
+      {contracts.map(c => (
+        <div key={c.contractId} className="text-xs">
+          <div className="font-medium">{c.tenantName || "(未填租客)"}</div>
+          <div className="num text-[10px]" style={{ color: "var(--ink-mute)" }}>{c.period}</div>
+          <div className="flex items-center gap-1 mt-0.5">
+            <span className="num">月租 {fmt(c.monthly)}</span>
+            <span className={`chip ${chipClass} text-[9px] px-1 py-0`}>
+              {Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// 月份覆蓋條: 1-12 月,顯示哪些月有合約覆蓋
+// coverage: 12 元素陣列, 各元素 "public" | "general" | "none"
+function MonthCoverageBar({ coverage, missingMonths, hasContracts }) {
+  if (!hasContracts) {
+    return <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>;
+  }
+  const colorOf = (c) => {
+    if (c === "public") return "var(--green)";
+    if (c === "general") return "var(--gold)";
+    return "var(--line)";
+  };
+  const totalCovered = coverage.filter(c => c !== "none").length;
+  return (
+    <div className="flex flex-col items-center gap-1">
+      {/* 12 個方格 */}
+      <div className="flex gap-[1px]">
+        {coverage.map((c, i) => (
+          <div key={i} title={`${i + 1}月: ${c === "public" ? "公益" : c === "general" ? "一般" : "缺月"}`}
+            style={{
+              width: "8px", height: "16px",
+              background: colorOf(c),
+              border: c === "none" ? "1px dashed var(--ink-mute)" : "none",
+              borderRadius: "1px",
+            }} />
+        ))}
+      </div>
+      {/* 月份標籤 */}
+      <div className="flex gap-[1px] text-[8px]" style={{ color: "var(--ink-mute)", letterSpacing: 0 }}>
+        {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
+          <span key={m} style={{ width: "8px", textAlign: "center" }}>{m}</span>
+        ))}
+      </div>
+      {/* 狀態 */}
+      {missingMonths.length === 0 ? (
+        <span className="chip chip-green text-[9px] mt-0.5">✓ 完整 12 個月</span>
+      ) : (
+        <div className="text-[10px] mt-0.5" style={{ color: "var(--gold)" }}>
+          <div className="font-medium">⚠ 缺 {missingMonths.length} 個月</div>
+          <div className="text-[9px]">缺: {missingMonths.join(",")} 月</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LatestContractCell({ contract, year, isPublic }) {
   if (!contract) {
     return <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>;
@@ -3972,7 +4060,22 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
             </div>
           </div>
           <div className="p-3 space-y-2">
-            {householdProperties.map(p => {
+            {(() => {
+              // 過濾出當年度有合約的物件
+              const propsWithContracts = householdProperties.filter(p => {
+                const agg = aggregateContractsForYear(contracts, p.id, year, filing.manualRentOverrides);
+                return agg.anyContractInYear;
+              });
+
+              if (propsWithContracts.length === 0) {
+                return (
+                  <div className="text-center py-8 text-xs" style={{ color: "var(--ink-mute)" }}>
+                    本戶在 {year} 年度沒有任何有效合約的物件
+                  </div>
+                );
+              }
+
+              return propsWithContracts.map(p => {
               const owner = members.find(m => m.id === p.ownerId);
               const agg = aggregateContractsForYear(contracts, p.id, year, filing.manualRentOverrides);
               const computables = getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides);
@@ -3981,6 +4084,12 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
               const override = (filing.manualRentOverrides || {})[overrideKey];
               const isIncluded = override ? override.includeInFiling !== false : true;
               const hasContracts = agg.anyContractInYear;
+
+              // 算去年同物件的應稅租金 (作參考) — 直接用合約自動算,不參考去年的手動覆寫
+              const lastYear = year - 1;
+              const lastYearComputables = getComputablesForProperty(p, lastYear, contracts, rentalRecords, {});
+              const lastYearTaxable = computeRentalIncome(lastYearComputables, params).taxable;
+              const lastYearAgg = aggregateContractsForYear(contracts, p.id, lastYear, {});
 
               return (
                 <details key={p.id} className="rounded" open={hasContracts} style={{ background: isIncluded ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
@@ -4001,15 +4110,33 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {!hasContracts && <span className="chip text-[10px]" style={{ color: "var(--ink-mute)" }}>無合約</span>}
                       {agg.hasMixedType && <span className="chip chip-amber text-[10px]">公益+一般</span>}
                       {override && <span className="chip chip-accent text-[10px]">手動覆寫</span>}
                     </div>
+                    {/* 去年同物件參考 */}
+                    {lastYearAgg.anyContractInYear && (
+                      <div className="text-right pr-3" style={{ borderRight: "1px solid var(--line-soft)" }}>
+                        <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{lastYear} 年應稅</div>
+                        <div className="font-serif num text-sm" style={{ color: "var(--ink-soft)" }}>
+                          {fmt(lastYearTaxable)}
+                        </div>
+                      </div>
+                    )}
                     <div className="text-right">
-                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>應稅</div>
+                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{year} 年應稅</div>
                       <div className="font-serif num text-base">
                         {isIncluded ? fmt(taxableTotal) : <span style={{ color: "var(--ink-mute)" }}>不計入</span>}
                       </div>
+                      {lastYearAgg.anyContractInYear && isIncluded && (
+                        <div className="text-[10px]" style={{
+                          color: taxableTotal > lastYearTaxable ? "var(--accent-deep)" :
+                                 taxableTotal < lastYearTaxable ? "var(--green)" : "var(--ink-mute)"
+                        }}>
+                          {taxableTotal === lastYearTaxable ? "持平" :
+                           taxableTotal > lastYearTaxable ? `↑ +${fmt(taxableTotal - lastYearTaxable)}` :
+                           `↓ -${fmt(lastYearTaxable - taxableTotal)}`}
+                        </div>
+                      )}
                     </div>
                   </summary>
 
@@ -4163,7 +4290,8 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                   </div>
                 </details>
               );
-            })}
+            });
+            })()}
           </div>
 
           <div className="px-5 py-3 text-xs" style={{ color: "var(--ink-mute)", borderTop: "1px solid var(--line-soft)" }}>
