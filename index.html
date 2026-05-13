@@ -1044,20 +1044,40 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
   if (enriched.length > 0) anyContractInYear = true;
 
   const overrideKey = `${propertyId}_${year}`;
-  const override = (manualOverrides || {})[overrideKey];
-  const manualAnnualRent = override ? toNum(override.annualRent) : null;
-  const appliedAnnualRent = override ? manualAnnualRent : totalRent;
+  const override = (manualOverrides || {})[overrideKey] || {};
+  // 單欄手動覆寫: 全年總租金 (公益部分仍依合約自動算)
+  // 向後相容: 舊版的 generalAnnualRent / publicAnnualRent / annualRent 都會被視為「總額」
+  let manualTotal = null;
+  if (override.totalAnnualRent !== undefined) {
+    manualTotal = toNum(override.totalAnnualRent);
+  } else if (override.annualRent !== undefined) {
+    manualTotal = toNum(override.annualRent);
+  } else if (override.generalAnnualRent !== undefined || override.publicAnnualRent !== undefined) {
+    // 舊版雙欄 → 加總
+    manualTotal = toNum(override.generalAnnualRent || 0) + toNum(override.publicAnnualRent || 0);
+  }
+
+  // 公益部分: 依合約自動 (固定)
+  const appliedPublicRent = publicRent;
+  // 一般部分:
+  //   有手動值: max(0, 總金額 - 公益)
+  //   無手動值: 依合約自動
+  const appliedGeneralRent = manualTotal !== null
+    ? Math.max(0, manualTotal - publicRent)
+    : generalRent;
 
   return {
     contracts: breakdown,
     totalMonths,
-    publicRent,
-    generalRent,
+    publicRent,           // 自動算出的公益部分
+    generalRent,          // 自動算出的一般部分
     computedAnnualRent: totalRent,
-    manualOverride: !!override,
-    manualAnnualRent,
-    manualIncludeInFiling: override ? override.includeInFiling : true,
-    appliedAnnualRent,
+    manualOverride: manualTotal !== null,
+    manualTotal,          // 使用者輸入的全年總租金 (含公益)
+    manualIncludeInFiling: override.includeInFiling !== false,
+    appliedPublicRent,
+    appliedGeneralRent,
+    appliedAnnualRent: appliedPublicRent + appliedGeneralRent,
     hasMixedType: publicRent > 0 && generalRent > 0,
     anyContractInYear,
   };
@@ -1071,55 +1091,50 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
   if (contracts && contracts.some(c => c.propertyId === property.id)) {
     const agg = aggregateContractsForYear(contracts, property.id, year, manualOverrides);
     if (agg.anyContractInYear) {
-      const includeInFiling = agg.manualIncludeInFiling !== false;
-      if (!includeInFiling) return [];
+      if (!agg.manualIncludeInFiling) return [];
 
-      // 手動覆寫: 總額一筆 (按多數類型判斷)
-      if (agg.manualOverride) {
-        // 用多數類型作為手動覆寫的 type;混合時偏向 general (較不利,保守處理)
-        const type = (agg.publicRent > agg.generalRent && agg.generalRent === 0) ? "public" : "general";
-        return [{
-          id: `manual_${property.id}_${year}`,
-          name: property.name,
+      const out = [];
+
+      // === 公益部分: 無論是否手動覆寫,公益都依合約自動 (逐份合約獨立) ===
+      const publicContractsForYear = agg.contracts.filter(c => c.isPublic);
+      publicContractsForYear.forEach(c => {
+        out.push({
+          id: `pub_${c.contractId}_${year}`,
+          name: `${property.name} · ${c.tenantName} (公益)`,
           address: property.address,
           ownerId: property.ownerId,
-          type,
-          monthlyRent: agg.totalMonths > 0 ? Math.round(agg.appliedAnnualRent / agg.totalMonths) : 0,
-          months: agg.totalMonths || 12,
-          annualRentDirect: agg.appliedAnnualRent,
+          type: "public",
+          monthlyRent: c.monthly,
+          months: c.months,
+          annualRentDirect: c.rent,
           expenseRatio: 0.43,
-          note: `手動覆寫 ${fmt(agg.appliedAnnualRent)}`,
+          note: `公益出租 · ${c.period} · ${c.months}個月`,
           _fromContract: true,
-          _agg: agg,
-        }];
-      }
+        });
+      });
 
-      // 自動計算: 公益 & 一般合約分開回傳 (各自獨立稅務處理)
-      const out = [];
-      if (agg.publicRent > 0) {
-        // 公益部分:用真實月租金計算 (合約每月免稅 15,000 是 per 合約 per month 的概念)
-        // 但我們聚合處理: 取公益合約的平均月租
-        const publicContracts = agg.contracts.filter(c => c.isPublic);
-        const publicTotalMonths = publicContracts.reduce((s, c) => s + c.months, 0);
-        // 為了讓「每月免稅 15,000」優惠正確套用,逐份合約分開
-        publicContracts.forEach(c => {
+      // === 一般部分 ===
+      if (agg.manualTotal !== null) {
+        // 手動模式: 一般部分 = 全年總租金 − 公益部分
+        if (agg.appliedGeneralRent > 0) {
+          const generalContracts = agg.contracts.filter(c => !c.isPublic);
+          const generalTotalMonths = generalContracts.reduce((s, c) => s + c.months, 0) || 12;
           out.push({
-            id: `pub_${c.contractId}_${year}`,
-            name: `${property.name} · ${c.tenantName} (公益)`,
+            id: `gen_manual_${property.id}_${year}`,
+            name: `${property.name} (一般·手動)`,
             address: property.address,
             ownerId: property.ownerId,
-            type: "public",
-            monthlyRent: c.monthly,
-            months: c.months,
-            annualRentDirect: c.rent,
+            type: "general",
+            monthlyRent: Math.round(agg.appliedGeneralRent / generalTotalMonths),
+            months: generalTotalMonths,
+            annualRentDirect: agg.appliedGeneralRent,
             expenseRatio: 0.43,
-            note: `公益出租 · ${c.period} · ${c.months}個月`,
+            note: `一般部分 = 手動總額 ${fmt(agg.manualTotal)} − 公益 ${fmt(agg.appliedPublicRent)}`,
             _fromContract: true,
           });
-        });
-      }
-      if (agg.generalRent > 0) {
-        // 一般合約: 同樣逐份分開 (保留可審視性)
+        }
+      } else {
+        // 自動: 逐份一般合約獨立
         const generalContracts = agg.contracts.filter(c => !c.isPublic);
         generalContracts.forEach(c => {
           out.push({
@@ -1137,6 +1152,7 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
           });
         });
       }
+
       return out;
     }
   }
@@ -3399,7 +3415,19 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
   const clearRentOverride = (propertyId) => {
     const key = `${propertyId}_${year}`;
     const overrides = { ...(filing.manualRentOverrides || {}) };
-    delete overrides[key];
+    const current = overrides[key] || {};
+    // 只清掉金額,保留 includeInFiling 等其他設定
+    const cleaned = { ...current };
+    delete cleaned.totalAnnualRent;
+    delete cleaned.generalAnnualRent;
+    delete cleaned.publicAnnualRent;
+    delete cleaned.annualRent; // 舊版相容
+    // 如果清完只剩 includeInFiling 預設值,整個刪掉
+    if (Object.keys(cleaned).length === 0 || (Object.keys(cleaned).length === 1 && cleaned.includeInFiling !== false)) {
+      delete overrides[key];
+    } else {
+      overrides[key] = cleaned;
+    }
     onChange({ ...filing, manualRentOverrides: overrides });
   };
 
@@ -3976,26 +4004,72 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                         </table>
 
                         {/* 手動覆寫區 */}
-                        <div className="mt-3 p-2 rounded text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                        {/* 單欄手動覆寫: 輸入全年總租金,系統自動扣公益 */}
+                        <div className="mt-3 p-3 rounded text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
                           <label className="flex items-center gap-2 cursor-pointer mb-2">
-                            <input type="checkbox" checked={!!(override && override.annualRent !== undefined)}
+                            <input type="checkbox" checked={override?.totalAnnualRent !== undefined}
                               onChange={e => {
                                 if (e.target.checked) {
-                                  updateRentOverride(p.id, { annualRent: agg.computedAnnualRent });
+                                  // 預填: 自動算出的總額
+                                  updateRentOverride(p.id, { totalAnnualRent: agg.computedAnnualRent });
                                 } else {
-                                  updateRentOverride(p.id, { annualRent: undefined });
+                                  // 還原: 清掉 totalAnnualRent (與舊版相容欄位)
+                                  updateRentOverride(p.id, {
+                                    totalAnnualRent: undefined,
+                                    annualRent: undefined,
+                                    generalAnnualRent: undefined,
+                                    publicAnnualRent: undefined
+                                  });
                                 }
                               }} />
-                            <span className="font-medium">手動覆寫年度總租金 (整體取代自動計算)</span>
+                            <span className="font-medium">手動覆寫年度總租金</span>
+                            <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>(系統會自動扣公益部分)</span>
                           </label>
-                          {override && override.annualRent !== undefined && (
-                            <div className="flex items-center gap-2 ml-5">
-                              <span>覆寫金額:</span>
-                              <input type="number" className="input-text w-32 text-right text-xs py-1"
-                                value={override.annualRent || ""}
-                                onChange={e => updateRentOverride(p.id, { annualRent: Number(e.target.value) || 0 })} />
-                              <span style={{ color: "var(--ink-mute)" }}>自動值: {fmt(agg.computedAnnualRent)}</span>
-                              <button className="btn-secondary text-[10px] ml-auto" onClick={() => clearRentOverride(p.id)}>還原自動</button>
+
+                          {override?.totalAnnualRent !== undefined && (
+                            <div className="ml-5 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <span style={{ minWidth: "100px" }}>全年總租金:</span>
+                                <input type="number" className="input-text w-40 text-right"
+                                  value={override.totalAnnualRent || ""}
+                                  placeholder="0"
+                                  onChange={e => updateRentOverride(p.id, { totalAnnualRent: Number(e.target.value) || 0 })} />
+                                <span style={{ color: "var(--ink-mute)" }}>(含公益)</span>
+                                <button className="btn-secondary text-[10px] ml-auto" onClick={() => clearRentOverride(p.id)}>↻ 還原為合約自動</button>
+                              </div>
+
+                              {/* 拆解明細 */}
+                              <div className="p-2 rounded" style={{ background: "white", border: "1px solid var(--line-soft)" }}>
+                                <div className="flex justify-between py-0.5">
+                                  <span>全年總租金 (你輸入)</span>
+                                  <span className="num">{fmt(agg.manualTotal)}</span>
+                                </div>
+                                <div className="flex justify-between py-0.5" style={{ color: "var(--green)" }}>
+                                  <span>− 公益部分 (依公益合約自動)</span>
+                                  <span className="num">{fmt(agg.appliedPublicRent)}</span>
+                                </div>
+                                <div className="flex justify-between py-0.5 pt-1 mt-1 font-medium" style={{ borderTop: "1px solid var(--line)", color: "var(--accent-deep)" }}>
+                                  <span>= 一般部分 (43% 費用率)</span>
+                                  <span className="num">{fmt(agg.appliedGeneralRent)}</span>
+                                </div>
+                                {agg.appliedGeneralRent < 0 && (
+                                  <div className="text-[10px] mt-1" style={{ color: "var(--gold)" }}>
+                                    ⚠ 你輸入的總租金小於公益部分,一般部分視為 0
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                                ⓘ 公益部分依「公益出租合約」自動計算 (每月免稅 15,000 + 60% 費用率),不可手動更動。
+                                你輸入的金額減掉公益後,剩餘視為一般出租 (43% 費用率)。
+                              </div>
+                            </div>
+                          )}
+
+                          {override?.totalAnnualRent === undefined && (
+                            <div className="ml-5 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                              自動算出的總額: <span className="num">{fmt(agg.computedAnnualRent)}</span>
+                              (公益 {fmt(agg.publicRent)} + 一般 {fmt(agg.generalRent)})
                             </div>
                           )}
                         </div>
