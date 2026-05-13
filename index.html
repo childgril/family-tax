@@ -2025,24 +2025,25 @@ function PropertiesPage({ data, setData, year }) {
                 const latestGeneral = generalContracts[0];
                 const latestPublic = publicContracts[0];
 
-                // 當年度是否有有效合約 (任一份合約涵蓋 year 內任一月)
-                const activeGeneral = generalContracts.some(c => {
-                  const s = parseRocDate(c.startDate), e = parseRocDate(c.endDate);
-                  return s && e && monthsInYear(s, e, year) > 0;
-                });
-                const activePublic = publicContracts.some(c => {
-                  const s = parseRocDate(c.startDate), e = parseRocDate(c.endDate);
-                  return s && e && monthsInYear(s, e, year) > 0;
-                });
-                const hasActiveThisYear = activeGeneral || activePublic;
+                // 計算當年度公益月份覆蓋情形 (PropertiesPage 不依賴申報戶設定,只看合約本身)
+                const agg = aggregateContractsForYear(data.contracts || [], p.id, year, {});
+                // 從 agg 拿生效資訊: 公益總月數 + 一般生效月數 (扣除被公益覆蓋)
+                const publicMonths = agg.contracts.filter(c => c.isPublic).reduce((s, c) => s + c.months, 0);
+                const generalEffectiveMonths = agg.contracts
+                  .filter(c => !c.isPublic && !c.overriddenByPublic)
+                  .reduce((s, c) => s + c.months, 0);
+                const hasActiveThisYear = agg.anyContractInYear;
 
-                // 預計報稅方式: 依當年度有效合約類型
+                // 預計報稅方式:
+                //   公益月數 = 0 + 一般生效月數 > 0  →  「一般」
+                //   公益月數 > 0 + 一般生效月數 > 0  →  「一般 + 公益」(公益期間外仍有一般)
+                //   公益月數 > 0 + 一般生效月數 = 0  →  「公益」(整年都被公益覆蓋,或沒有任何一般合約)
                 let filingType, filingChip;
-                if (activeGeneral && activePublic) {
+                if (publicMonths > 0 && generalEffectiveMonths > 0) {
                   filingType = "一般 + 公益"; filingChip = "chip-accent";
-                } else if (activePublic) {
+                } else if (publicMonths > 0) {
                   filingType = "公益"; filingChip = "chip-green";
-                } else if (activeGeneral) {
+                } else if (generalEffectiveMonths > 0) {
                   filingType = "一般"; filingChip = "chip-amber";
                 } else {
                   filingType = "—"; filingChip = "";
