@@ -1691,11 +1691,13 @@ function PropertiesPage({ data, setData, year }) {
     taxFree: { label: "免稅紀錄", chip: "chip-accent", desc: "不報稅,留底" },
   };
 
-  // 預先算每個物件的應稅與免稅金額
-  const enriched = data.properties.map(p => {
-    const r = computeRentalIncome([p], params);
-    return { ...p, computed: r.breakdown[0] };
-  });
+  // 預先算每個物件的應稅與免稅金額;依序號排序
+  const enriched = data.properties
+    .map(p => {
+      const r = computeRentalIncome([p], params);
+      return { ...p, computed: r.breakdown[0] };
+    })
+    .sort((a, b) => String(a.serial || "").localeCompare(String(b.serial || "")));
 
   return (
     <div className="fade-in">
@@ -1732,7 +1734,8 @@ function PropertiesPage({ data, setData, year }) {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
-                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件</th>
+                <th className="text-left px-3 py-2 text-xs font-medium w-20" style={{ color: "var(--ink-mute)" }}>序號</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件 / 地址</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
                 <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>合約數</th>
                 <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>已建立紀錄年度</th>
@@ -1750,9 +1753,14 @@ function PropertiesPage({ data, setData, year }) {
                   .sort();
                 return (
                   <tr key={p.id} className="table-row">
-                    <td className="px-5 py-3">
-                      <div className="font-medium">{p.name || "(未命名)"}</div>
-                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address || ""}</div>
+                    <td className="px-3 py-3">
+                      <span className="num font-medium">{p.serial || "—"}</span>
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="font-medium">{p.name || p.address || "(未命名)"}</div>
+                      {p.name !== p.address && p.address && (
+                        <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address}</div>
+                      )}
                     </td>
                     <td className="px-3 py-3">{owner?.name || "—"}</td>
                     <td className="px-3 py-3 text-center">
@@ -1804,6 +1812,16 @@ function PropertiesPage({ data, setData, year }) {
 
 function PropertyModal({ property, members, types, params, onSave, onClose }) {
   const [p, setP] = useState({ ...property });
+  // 名稱是否已手動編輯過 (避免自動生成覆寫使用者輸入)
+  const [nameTouched, setNameTouched] = useState(!!(property && property.id && property.name));
+
+  // 自動產生名稱 = "序號 地址" (僅當使用者沒手動改過名稱時)
+  const autoSetName = (serial, address) => {
+    if (nameTouched) return;
+    const newName = (serial && address) ? `${serial} ${address}` : (address || "");
+    setP(prev => ({ ...prev, name: newName }));
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(26,29,35,0.4)" }} onClick={onClose}>
       <div className="card w-[520px] max-h-[90vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
@@ -1811,16 +1829,38 @@ function PropertyModal({ property, members, types, params, onSave, onClose }) {
         <h2 className="font-serif text-xl mb-4">{p.id ? "編輯物件" : "新增出租物件"}</h2>
 
         <div className="space-y-3">
-          <Field label="物件名稱 / 簡稱">
-            <input className="input-text-plain w-full" value={p.name} onChange={e => setP({...p, name: e.target.value})} placeholder="例:延平街148巷2弄10號" />
-          </Field>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="序號">
+              <input className="input-text w-full" value={p.serial || ""}
+                onChange={e => {
+                  const v = e.target.value;
+                  setP(prev => ({ ...prev, serial: v }));
+                  autoSetName(v, p.address);
+                }}
+                placeholder="例:001 / A-1" />
+            </Field>
+            <div className="col-span-2">
+              <Field label="屋主 (誰要把租金收入計入所得)">
+                <select className="input-text-plain w-full" value={p.ownerId} onChange={e => setP({...p, ownerId: e.target.value})}>
+                  <option value="">— 選擇屋主 —</option>
+                  {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </Field>
+            </div>
+          </div>
           <Field label="完整地址">
-            <input className="input-text-plain w-full" value={p.address} onChange={e => setP({...p, address: e.target.value})} placeholder="例:花蓮市延平街148巷2弄10號" />
+            <input className="input-text-plain w-full" value={p.address}
+              onChange={e => {
+                const v = e.target.value;
+                setP(prev => ({ ...prev, address: v }));
+                autoSetName(p.serial, v);
+              }}
+              placeholder="例:花蓮市延平街148巷2弄10號" />
           </Field>
-          <Field label="屋主 (誰要把租金收入計入所得)">
-            <select className="input-text-plain w-full" value={p.ownerId} onChange={e => setP({...p, ownerId: e.target.value})}>
-              {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+          <Field label="物件名稱 / 簡稱" hint="預設為「序號 地址」,可手動覆寫">
+            <input className="input-text-plain w-full" value={p.name || ""}
+              onChange={e => { setP({...p, name: e.target.value}); setNameTouched(true); }}
+              placeholder="例:001 花蓮市延平街148巷2弄10號" />
           </Field>
           <Field label="備註">
             <textarea className="input-text-plain w-full" rows={2} value={p.note || ""} onChange={e => setP({...p, note: e.target.value})} />
@@ -1835,10 +1875,11 @@ function PropertyModal({ property, members, types, params, onSave, onClose }) {
         <div className="flex gap-2 justify-end mt-6">
           <button className="btn-secondary" onClick={onClose}>取消</button>
           <button className="btn-primary" onClick={() => {
-            if (!p.name) return alert("請輸入物件名稱");
+            if (!p.address) return alert("請輸入地址");
             if (!p.ownerId) return alert("請選擇屋主");
-            // 為了相容性,保留 type/monthlyRent 預設值
-            onSave({ type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43, ...p });
+            // 名稱沒填就用「序號 地址」
+            const finalName = p.name || (p.serial ? `${p.serial} ${p.address}` : p.address);
+            onSave({ type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43, ...p, name: finalName });
           }}>儲存</button>
         </div>
       </div>
@@ -1925,11 +1966,12 @@ function parseBool(v) {
 // ============================================================
 // 出租物件 CSV 範本
 // ============================================================
-const PROPERTIES_CSV_HEADERS = ["物件名稱", "地址", "屋主", "備註"];
+const PROPERTIES_CSV_HEADERS = ["序號", "屋主", "地址", "備註"];
 const PROPERTIES_CSV_SAMPLE = [
   PROPERTIES_CSV_HEADERS.join(","),
-  ["延平街 4F-3", "花蓮市延平街148巷2弄10號4f-3", "陳大年", ""].join(","),
-  ["民德四街 1F", "花蓮市民德四街19號", "陳大年", "3層樓不同人"].join(","),
+  ["001", "陳大年", "花蓮市延平街148巷2弄10號", ""].join(","),
+  ["002", "陳大年", "花蓮市延平街148巷2弄10號2f-2", ""].join(","),
+  ["003", "陳大年", "花蓮市民德四街19號", "3層樓不同人"].join(","),
 ].join("\n");
 
 // ============================================================
@@ -2001,9 +2043,9 @@ function ContractsPage({ data, setData, year }) {
         if (rows.length < 2) return alert("CSV 為空或只有標題列");
         const headers = rows[0].map(h => h.trim());
         const requiredIdx = {
-          name: headers.findIndex(h => h.includes("物件") || h.toLowerCase() === "name"),
-          address: headers.findIndex(h => h.includes("地址") || h.toLowerCase() === "address"),
+          serial: headers.findIndex(h => h.includes("序號") || h.toLowerCase() === "serial" || h.toLowerCase() === "no"),
           owner: headers.findIndex(h => h.includes("屋主") || h.toLowerCase() === "owner"),
+          address: headers.findIndex(h => h.includes("地址") || h.toLowerCase() === "address"),
           note: headers.findIndex(h => h.includes("備註") || h.toLowerCase() === "note"),
         };
         if (requiredIdx.address < 0) return alert("找不到「地址」欄,請檢查 CSV 標題");
@@ -2013,6 +2055,7 @@ function ContractsPage({ data, setData, year }) {
         rows.slice(1).forEach((r, i) => {
           const address = (r[requiredIdx.address] || "").trim();
           if (!address) return;
+          const serial = requiredIdx.serial >= 0 ? (r[requiredIdx.serial] || "").trim() : "";
           // 找屋主 (支援用名字)
           const ownerName = requiredIdx.owner >= 0 ? (r[requiredIdx.owner] || "").trim() : "";
           const owner = data.members.find(m => m.name === ownerName) || data.members[0];
@@ -2020,16 +2063,20 @@ function ContractsPage({ data, setData, year }) {
             skipped.push(`第 ${i+2} 列: 找不到屋主 (請先建立家庭成員)`);
             return;
           }
-          // 檢查是否已存在
+          // 檢查是否已存在 (依序號或地址)
           const existing = (data.properties || []).find(p =>
-            String(p.address || "").trim() === address || String(p.name || "").trim() === address);
+            (serial && p.serial === serial) ||
+            String(p.address || "").trim() === address);
           if (existing) {
-            skipped.push(`第 ${i+2} 列 (${address}): 已存在,略過`);
+            skipped.push(`第 ${i+2} 列 (${serial || address}): 已存在,略過`);
             return;
           }
+          // 物件名稱自動生成 = 序號 + 地址 (有序號才加)
+          const name = serial ? `${serial} ${address}` : address;
           newProps.push({
             id: uid(),
-            name: (requiredIdx.name >= 0 ? r[requiredIdx.name] : "") || address.slice(0, 30),
+            serial,
+            name,
             address,
             ownerId: owner.id,
             type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43,
@@ -2236,7 +2283,7 @@ function ContractsPage({ data, setData, year }) {
             <div>
               <div className="font-medium text-sm mb-2">① 匯入出租物件</div>
               <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
-                CSV 欄位: <code className="num">物件名稱, 地址, 屋主, 備註</code>
+                CSV 欄位: <code className="num">序號, 屋主, 地址, 備註</code>
               </div>
               <div className="flex gap-2">
                 <button className="btn-secondary text-xs"
@@ -2305,12 +2352,15 @@ function ContractsPage({ data, setData, year }) {
               onClick={() => {
                 if ((data.properties || []).length === 0) return alert("沒有物件可匯出");
                 const rows = [PROPERTIES_CSV_HEADERS.join(",")];
-                data.properties.forEach(p => {
+                // 依序號排序匯出
+                const sorted = [...data.properties].sort((a, b) =>
+                  String(a.serial || "").localeCompare(String(b.serial || "")));
+                sorted.forEach(p => {
                   const owner = data.members.find(m => m.id === p.ownerId);
                   rows.push([
-                    JSON.stringify(p.name || ""),
-                    JSON.stringify(p.address || ""),
+                    JSON.stringify(p.serial || ""),
                     JSON.stringify(owner?.name || ""),
+                    JSON.stringify(p.address || ""),
                     JSON.stringify(p.note || "")
                   ].join(","));
                 });
@@ -4654,10 +4704,10 @@ const SAMPLE_FAMILY = (() => {
       { id: ids[6], name: "陳福伯", relation: "parent",      age: 85, isDisabled: false, isStudent: false, needsLongTermCare: true,  cannotSupportSelf: false, coResident: false, idNumber: "1111", note: "父親 (直系尊親屬,70歲以上免稅額提高)" },
     ],
     properties: [
-      { id: propIds[0], name: "中山北路套房", address: "台北市中山區", ownerId: ids[0], type: "general", monthlyRent: 25000, months: 12, expenseRatio: 0.43, note: "", taxFreeReason: "" },
-      { id: propIds[1], name: "板橋公益宅", address: "新北市板橋區", ownerId: ids[0], type: "public", monthlyRent: 18000, months: 12, expenseRatio: 0.43, note: "公益出租人,租給政府指定戶", taxFreeReason: "" },
-      { id: propIds[2], name: "台中西區雅房", address: "台中市西區", ownerId: ids[2], type: "general", monthlyRent: 16000, months: 12, expenseRatio: 0.43, note: "", taxFreeReason: "" },
-      { id: propIds[3], name: "祖厝", address: "嘉義市", ownerId: ids[6], type: "taxFree", monthlyRent: 0, months: 0, note: "自住,留紀錄用", taxFreeReason: "自住,未出租" },
+      { id: propIds[0], serial: "001", name: "001 中山北路套房", address: "台北市中山區", ownerId: ids[0], type: "general", monthlyRent: 25000, months: 12, expenseRatio: 0.43, note: "", taxFreeReason: "" },
+      { id: propIds[1], serial: "002", name: "002 板橋公益宅", address: "新北市板橋區", ownerId: ids[0], type: "public", monthlyRent: 18000, months: 12, expenseRatio: 0.43, note: "公益出租人,租給政府指定戶", taxFreeReason: "" },
+      { id: propIds[2], serial: "003", name: "003 台中西區雅房", address: "台中市西區", ownerId: ids[2], type: "general", monthlyRent: 16000, months: 12, expenseRatio: 0.43, note: "", taxFreeReason: "" },
+      { id: propIds[3], serial: "004", name: "004 祖厝", address: "嘉義市", ownerId: ids[6], type: "taxFree", monthlyRent: 0, months: 0, note: "自住,留紀錄用", taxFreeReason: "自住,未出租" },
     ],
     rentalRecords: [],
     contracts: [
