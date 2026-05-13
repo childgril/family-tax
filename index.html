@@ -2003,12 +2003,13 @@ function PropertiesPage({ data, setData, year }) {
                 <th className="text-left px-3 py-2 text-xs font-medium w-20 cursor-pointer hover:underline"
                   style={{ color: sortBy === "serial" ? "var(--accent-deep)" : "var(--ink-mute)" }}
                   onClick={() => toggleSort("serial")}>序號{sortIcon("serial")}</th>
-                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件 / 地址</th>
                 <th className="text-left px-3 py-2 text-xs font-medium cursor-pointer hover:underline"
                   style={{ color: sortBy === "owner" ? "var(--accent-deep)" : "var(--ink-mute)" }}
                   onClick={() => toggleSort("owner")}>屋主{sortIcon("owner")}</th>
+                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>物件 / 地址</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>最新一般合約</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>最新公益合約</th>
+                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>預計報稅方式</th>
                 <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>備註</th>
                 <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>操作</th>
               </tr>
@@ -2025,13 +2026,29 @@ function PropertiesPage({ data, setData, year }) {
                 const latestPublic = publicContracts[0];
 
                 // 當年度是否有有效合約 (任一份合約涵蓋 year 內任一月)
-                const hasActiveThisYear = myContracts.some(c => {
+                const activeGeneral = generalContracts.some(c => {
                   const s = parseRocDate(c.startDate), e = parseRocDate(c.endDate);
                   return s && e && monthsInYear(s, e, year) > 0;
                 });
+                const activePublic = publicContracts.some(c => {
+                  const s = parseRocDate(c.startDate), e = parseRocDate(c.endDate);
+                  return s && e && monthsInYear(s, e, year) > 0;
+                });
+                const hasActiveThisYear = activeGeneral || activePublic;
+
+                // 預計報稅方式: 依當年度有效合約類型
+                let filingType, filingChip;
+                if (activeGeneral && activePublic) {
+                  filingType = "一般 + 公益"; filingChip = "chip-accent";
+                } else if (activePublic) {
+                  filingType = "公益"; filingChip = "chip-green";
+                } else if (activeGeneral) {
+                  filingType = "一般"; filingChip = "chip-amber";
+                } else {
+                  filingType = "—"; filingChip = "";
+                }
 
                 const isExpanded = expandedId === p.id;
-                // 列底色: 展開 → 強調色;當年度有合約 → 淡黃;無 → 白
                 const rowBg = isExpanded ? "var(--accent-soft)"
                   : (hasActiveThisYear ? "#fef9ec" : "white");
 
@@ -2046,18 +2063,25 @@ function PropertiesPage({ data, setData, year }) {
                         </span>
                         <span className="num font-medium">{p.serial || "—"}</span>
                       </td>
+                      <td className="px-3 py-3 text-xs">{owner?.name || "—"}</td>
                       <td className="px-3 py-3">
                         <div className="font-medium">{p.name || p.address || "(未命名)"}</div>
                         {p.name !== p.address && p.address && (
                           <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address}</div>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-xs">{owner?.name || "—"}</td>
                       <td className="px-3 py-3">
                         <LatestContractCell contract={latestGeneral} year={year} />
                       </td>
                       <td className="px-3 py-3">
                         <LatestContractCell contract={latestPublic} year={year} isPublic />
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        {filingChip ? (
+                          <span className={`chip ${filingChip} text-[10px]`}>{filingType}</span>
+                        ) : (
+                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-xs" style={{ color: "var(--ink-soft)", maxWidth: "180px" }}>
                         {p.note || <span style={{ color: "var(--ink-mute)" }}>—</span>}
@@ -2069,7 +2093,7 @@ function PropertiesPage({ data, setData, year }) {
                     </tr>
                     {isExpanded && (
                       <tr>
-                        <td colSpan={7} className="p-0" style={{ background: "#fdfcf7", borderBottom: "1px solid var(--line)" }}>
+                        <td colSpan={8} className="p-0" style={{ background: "#fdfcf7", borderBottom: "1px solid var(--line)" }}>
                           <div className="p-4">
                             <div className="ornament mb-3" style={{ color: "var(--accent-deep)" }}>
                               CONTRACTS HISTORY · 此物件合約歷史
@@ -3918,7 +3942,7 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
               const hasContracts = agg.anyContractInYear;
 
               return (
-                <details key={p.id} className="rounded" style={{ background: isIncluded ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
+                <details key={p.id} className="rounded" open={hasContracts} style={{ background: isIncluded ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
                   <summary className="px-3 py-2 flex items-center gap-3 cursor-pointer">
                     <span className="chevron text-xs" style={{ color: "var(--ink-mute)" }}>▸</span>
                     {hasContracts ? (
