@@ -1787,7 +1787,7 @@ function Dashboard({ data, year, setPage }) {
                 <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>淨所得</th>
                 <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>稅率</th>
                 <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>扣除額</th>
-                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應納稅</th>
+                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應補/退稅</th>
               </tr>
             </thead>
             <tbody>
@@ -1810,7 +1810,14 @@ function Dashboard({ data, year, setPage }) {
                         {r.useItemized ? "列舉" : "標準"}
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-right num font-serif text-base">{fmt(r.tax)}</td>
+                    <td className="px-5 py-3 text-right num font-serif text-base">
+                      {(() => {
+                        const fd = r.finalDue || 0;
+                        const color = fd > 0 ? "var(--ink)" : fd < 0 ? "var(--green)" : "var(--ink-mute)";
+                        const prefix = fd > 0 ? "" : fd < 0 ? "−" : "";
+                        return <span style={{ color }}>{prefix}{fmt(Math.abs(fd))}</span>;
+                      })()}
+                    </td>
                   </tr>
                 );
               })}
@@ -3879,7 +3886,16 @@ function FilingPage({ data, setData, year, setPage }) {
                   style={{ borderColor: "var(--line-soft)", background: selectedId === f.id ? "#fafaf6" : "white",
                     borderLeft: selectedId === f.id ? "3px solid var(--accent)" : "3px solid transparent" }}>
                   <div className="text-sm font-medium truncate">{f.name}</div>
-                  <div className="text-xs num mt-1" style={{ color: "var(--ink-mute)" }}>應納 {fmt(r?.tax || 0)}</div>
+                  {r && (() => {
+                    const fd = r.finalDue || 0;
+                    const label = fd > 0 ? "應補繳" : fd < 0 ? "可退稅" : "平衡";
+                    const color = fd > 0 ? "var(--ink)" : fd < 0 ? "var(--green)" : "var(--ink-mute)";
+                    return (
+                      <div className="text-xs num mt-1" style={{ color }}>
+                        {label} <span className="font-medium">{fmt(Math.abs(fd))}</span>
+                      </div>
+                    );
+                  })()}
                   <div className="flex gap-1 mt-1">
                     {r?.hasSpouse && <span className="chip text-[10px]">夫妻</span>}
                     {r?.useItemized && <span className="chip chip-green text-[10px]">列舉</span>}
@@ -5715,10 +5731,10 @@ function OfficialFormView({ result, year, filing }) {
               <span className="font-bold">−</span>
               <FormulaCell label="累進差額" value={deductValue} />
               <span className="font-bold">=</span>
-              <FormulaCell label="應納稅額" value={taxBeforeCredits} highlight />
+              <FormulaCell label="應納稅額" value={taxBeforeCredits} />
             </div>
             <div className="text-xs num" style={{ color: "var(--ink-mute)" }}>
-              綜合所得淨額 = {fmt(netIncome)} (若小於 0 則以 0 計算)
+              綜合所得淨額 = {fmt(netIncome)} (若小於 0 則以 0 計算) · 此為「未扣抵減前」之應納稅額,實際應補/退稅見下方第二列
               {salarySD > 0 && <span className="ml-2">· 採用申報書邏輯:薪資特扣 {fmt(salarySD)} 已於「綜合所得總額」前扣除</span>}
             </div>
           </div>
