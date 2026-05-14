@@ -604,7 +604,9 @@ function computeAllTaxMethods(ctx) {
   const allMemberExemption = exemptionByMember.reduce((s, e) => s + e.amount, 0);
 
   const finalize = (taxRaw) => {
-    const taxAfterCredits = Math.max(0, taxRaw + dividendSeparateTax - totalCreditsBeforePrepaid);
+    // 注意: 股利抵減 (8.5%) 與已扣繳稅額一樣,可以退稅 (即抵減後負值,可退)
+    // 但「重購自用住宅退稅」與「投資抵減」也是可以退的,所以全部一起算
+    const taxAfterCredits = taxRaw + dividendSeparateTax - totalCreditsBeforePrepaid;
     const finalDue = taxAfterCredits - prepaidTax;
     return { taxRaw, taxAfterCredits, finalDue };
   };
@@ -961,7 +963,8 @@ function computeTaxForFiling(filing, members, year) {
   //   (2) 減「投資抵減 / 大陸地區所得已納稅額 / 重購退稅 / 股利抵減」(但股利抵減上限 8 萬)
   //   (3) 減「已預扣繳稅額」= 應自繳/退稅
   const totalCreditsBeforePrepaid = dividendCredit + repurchaseCredit + otherCredit;
-  const taxAfterCredits = Math.max(0, taxResult.tax + dividendSeparateTax - totalCreditsBeforePrepaid);
+  // 注意: 股利抵減、重購退稅可以「退稅」,不應被 Math.max(0,...) 卡住
+  const taxAfterCredits = taxResult.tax + dividendSeparateTax - totalCreditsBeforePrepaid;
   const finalDue = taxAfterCredits - prepaidTax; // 正數 = 應補繳;負數 = 可退稅
 
   // === 7.8 5 種計稅方式試算 (所得稅法第15條夫妻計稅選擇) ===
@@ -1015,7 +1018,7 @@ function computeTaxForFiling(filing, members, year) {
   const altNet = Math.max(0, grossIncome - exemption - altGeneral - specialTotal - blDiff);
   const altTaxRaw = applyBrackets(altNet, params).tax;
   // alt 也要扣抵
-  const altTaxAfterCredits = Math.max(0, altTaxRaw + dividendSeparateTax - totalCreditsBeforePrepaid);
+  const altTaxAfterCredits = altTaxRaw + dividendSeparateTax - totalCreditsBeforePrepaid;
   const altTax = altTaxAfterCredits - prepaidTax;
   const saving = altTax - finalDue; // 比較最終實繳
 
