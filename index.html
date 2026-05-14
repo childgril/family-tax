@@ -1231,6 +1231,30 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
 // 取得某物件在某年度的計算用 records (可能 1~N 份,公益/一般分開)
 // ============================================================
 function getComputablesForProperty(property, year, contracts, rentalRecords, manualOverrides) {
+  // 先檢查: 無合約 + 手動補列 (適用土地、停車位等)
+  const overrideKey = `${property.id}_${year}`;
+  const override = (manualOverrides || {})[overrideKey] || {};
+  const hasAnyContract = contracts && contracts.some(c => c.propertyId === property.id);
+  const aggCheck = hasAnyContract ? aggregateContractsForYear(contracts, property.id, year, manualOverrides) : null;
+  const noContractInYear = !aggCheck || !aggCheck.anyContractInYear;
+
+  if (noContractInYear && override.totalAnnualRent !== undefined && override.totalAnnualRent > 0) {
+    const isPub = override.manualType === "public";
+    return [{
+      id: `manual_${property.id}_${year}`,
+      name: `${property.name} (手動補列)`,
+      address: property.address,
+      ownerId: property.ownerId,
+      type: isPub ? "public" : "general",
+      monthlyRent: Math.round(toNum(override.totalAnnualRent) / 12),
+      months: 12,
+      annualRentDirect: toNum(override.totalAnnualRent),
+      expenseRatio: 0.43,
+      note: `${isPub ? "公益" : "一般"}·手動補列 ${fmt(toNum(override.totalAnnualRent))}`,
+      _fromContract: true,
+    }];
+  }
+
   // 優先: 合約資料
   if (contracts && contracts.some(c => c.propertyId === property.id)) {
     const agg = aggregateContractsForYear(contracts, property.id, year, manualOverrides);
@@ -2230,23 +2254,31 @@ function PropertiesPage({ data, setData, year }) {
                 const yearPublics = agg.contracts.filter(c => c.isPublic && c.months > 0)
                   .sort((a, b) => String(a.period).localeCompare(String(b.period)));
 
-                // 算每個月被誰覆蓋 (1-12)
-                // coverage[i] = "public" | "general" | "none"
+                // 算每個月的覆蓋狀況 (1-12)
+                // coverage[i] = "public" | "general" | "overlap" | "none"
+                // 用「原始合約」計算 (不去重),才能偵測重疊
                 const coverage = new Array(12).fill("none");
-                agg.contracts.forEach(c => {
-                  if (c.effectiveDays) {
-                    c.effectiveDays.forEach(d => {
-                      // 該月使用比例 >= 50% 才算「主要」
-                      // 同月若同時有公益與一般,公益優先 (已在 agg 處理)
-                      if (d.use > 0) {
-                        if (c.isPublic) coverage[d.month - 1] = "public";
-                        else if (coverage[d.month - 1] === "none") coverage[d.month - 1] = "general";
-                      }
-                    });
-                  }
+                myContracts.forEach(c => {
+                  const s = parseRocDate(c.startDate), e = parseRocDate(c.endDate);
+                  if (!s || !e) return;
+                  const days = monthDaysInYear(s, e, year);
+                  const isPublic = c.contractType === "public" || c.isPublicLandlord;
+                  days.forEach((d, i) => {
+                    if (d === 0) return;
+                    const cur = coverage[i];
+                    const newType = isPublic ? "public" : "general";
+                    if (cur === "none") {
+                      coverage[i] = newType;
+                    } else if (cur !== newType && cur !== "overlap") {
+                      // 不同類型混雜 → 重疊
+                      coverage[i] = "overlap";
+                    }
+                    // 同類型 (兩份一般 / 兩份公益) 不視為「重疊」(可能是接力)
+                  });
                 });
 
                 const missingMonths = coverage.map((c, i) => c === "none" ? i + 1 : null).filter(Boolean);
+                const overlapMonths = coverage.map((c, i) => c === "overlap" ? i + 1 : null).filter(Boolean);
                 const totalCoveredMonths = coverage.filter(c => c !== "none").length;
 
                 const publicMonths = agg.contracts.filter(c => c.isPublic).reduce((s, c) => s + c.months, 0);
@@ -2295,7 +2327,7 @@ function PropertiesPage({ data, setData, year }) {
                         <YearContractsCell contracts={yearPublics} chipClass="chip-green" isPublic />
                       </td>
                       <td className="px-3 py-3 align-top">
-                        <MonthCoverageBar coverage={coverage} missingMonths={missingMonths} hasContracts={hasActiveThisYear} />
+                        <MonthCoverageBar coverage={coverage} missingMonths={missingMonths} overlapMonths={overlapMonths} hasContracts={hasActiveThisYear} />
                       </td>
                       <td className="px-3 py-3 text-center align-top">
                         {filingChip ? (
@@ -2393,22 +2425,28 @@ function YearContractsCell({ contracts, chipClass, isPublic }) {
 
 // 月份覆蓋條: 1-12 月,顯示哪些月有合約覆蓋
 // coverage: 12 元素陣列, 各元素 "public" | "general" | "none"
-function MonthCoverageBar({ coverage, missingMonths, hasContracts }) {
+function MonthCoverageBar({ coverage, missingMonths, overlapMonths = [], hasContracts }) {
   if (!hasContracts) {
     return <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>;
   }
   const colorOf = (c) => {
-    if (c === "public") return "var(--green)";
-    if (c === "general") return "var(--gold)";
+    if (c === "overlap") return "#c83232";   // 紅色:同月同時被一般+公益覆蓋
+    if (c === "general") return "var(--green)"; // 綠色:一般
+    if (c === "public") return "var(--gold)";   // 黃色:公益
     return "var(--line)";
   };
-  const totalCovered = coverage.filter(c => c !== "none").length;
+  const labelOf = (c) => {
+    if (c === "overlap") return "重疊 (一般+公益)";
+    if (c === "general") return "一般";
+    if (c === "public") return "公益";
+    return "缺月";
+  };
   return (
     <div className="flex flex-col items-center gap-1">
       {/* 12 個方格 */}
       <div className="flex gap-[1px]">
         {coverage.map((c, i) => (
-          <div key={i} title={`${i + 1}月: ${c === "public" ? "公益" : c === "general" ? "一般" : "缺月"}`}
+          <div key={i} title={`${i + 1}月: ${labelOf(c)}`}
             style={{
               width: "8px", height: "16px",
               background: colorOf(c),
@@ -2423,15 +2461,29 @@ function MonthCoverageBar({ coverage, missingMonths, hasContracts }) {
           <span key={m} style={{ width: "8px", textAlign: "center" }}>{m}</span>
         ))}
       </div>
+      {/* 圖例 */}
+      <div className="flex gap-2 text-[8px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+        <span className="flex items-center gap-0.5"><span style={{ width: "6px", height: "6px", background: "var(--green)", display: "inline-block", borderRadius: "1px" }}></span>一般</span>
+        <span className="flex items-center gap-0.5"><span style={{ width: "6px", height: "6px", background: "var(--gold)", display: "inline-block", borderRadius: "1px" }}></span>公益</span>
+        {overlapMonths.length > 0 && <span className="flex items-center gap-0.5"><span style={{ width: "6px", height: "6px", background: "#c83232", display: "inline-block", borderRadius: "1px" }}></span>重疊</span>}
+      </div>
       {/* 狀態 */}
-      {missingMonths.length === 0 ? (
-        <span className="chip chip-green text-[9px] mt-0.5">✓ 完整 12 個月</span>
-      ) : (
-        <div className="text-[10px] mt-0.5" style={{ color: "var(--gold)" }}>
-          <div className="font-medium">⚠ 缺 {missingMonths.length} 個月</div>
-          <div className="text-[9px]">缺: {missingMonths.join(",")} 月</div>
-        </div>
-      )}
+      <div className="space-y-0.5 mt-0.5">
+        {overlapMonths.length > 0 && (
+          <div className="text-[10px]" style={{ color: "#c83232" }}>
+            <div className="font-medium">⚠ 重疊 {overlapMonths.length} 個月</div>
+            <div className="text-[9px]">{overlapMonths.join(",")} 月</div>
+          </div>
+        )}
+        {missingMonths.length === 0 && overlapMonths.length === 0 ? (
+          <span className="chip chip-green text-[9px]">✓ 完整 12 個月</span>
+        ) : missingMonths.length > 0 ? (
+          <div className="text-[10px]" style={{ color: "var(--gold-deep, var(--gold))" }}>
+            <div className="font-medium">⚠ 缺 {missingMonths.length} 個月</div>
+            <div className="text-[9px]">缺: {missingMonths.join(",")} 月</div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -4238,21 +4290,24 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
           </div>
           <div className="p-3 space-y-2">
             {(() => {
-              // 過濾出當年度有合約的物件
-              const propsWithContracts = householdProperties.filter(p => {
-                const agg = aggregateContractsForYear(contracts, p.id, year, filing.manualRentOverrides);
-                return agg.anyContractInYear;
-              });
-
-              if (propsWithContracts.length === 0) {
+              if (householdProperties.length === 0) {
                 return (
                   <div className="text-center py-8 text-xs" style={{ color: "var(--ink-mute)" }}>
-                    本戶在 {year} 年度沒有任何有效合約的物件
+                    本戶尚未建立任何出租物件
                   </div>
                 );
               }
+              // 顯示全部物件,按「有合約優先,沒合約在下」+ 序號排序
+              const sortedProps = [...householdProperties].sort((a, b) => {
+                const aggA = aggregateContractsForYear(contracts, a.id, year, filing.manualRentOverrides);
+                const aggB = aggregateContractsForYear(contracts, b.id, year, filing.manualRentOverrides);
+                if (aggA.anyContractInYear !== aggB.anyContractInYear) {
+                  return aggA.anyContractInYear ? -1 : 1;
+                }
+                return String(a.serial || "").localeCompare(String(b.serial || ""), "zh-Hant", { numeric: true });
+              });
 
-              return propsWithContracts.map(p => {
+              return sortedProps.map(p => {
               const owner = members.find(m => m.id === p.ownerId);
               const agg = aggregateContractsForYear(contracts, p.id, year, filing.manualRentOverrides);
               const computables = getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides);
@@ -4281,9 +4336,12 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                         onClick={e => e.stopPropagation()} />
                     ) : null}
                     <div className="flex-1">
-                      <div className="text-sm font-medium">{p.name}</div>
-                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                        {owner?.name} · {p.address}
+                      <div className="flex items-baseline gap-2">
+                        {p.serial && <span className="chip chip-accent text-[10px] num">{p.serial}</span>}
+                        <span className="font-serif text-base font-medium">{p.address || p.name}</span>
+                      </div>
+                      <div className="text-xs mt-0.5" style={{ color: "var(--ink-mute)" }}>
+                        {owner?.name}{p.name && p.name !== p.address ? ` · ${p.name}` : ""}{!hasContracts && " · 本年度無合約"}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -4319,11 +4377,80 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
 
                   <div className="px-3 pb-3 pt-2" style={{ borderTop: "1px solid var(--line-soft)" }}>
                     {!hasContracts ? (
-                      <div className="text-xs p-3 text-center" style={{ color: "var(--ink-mute)" }}>
-                        此物件在 {year} 年度沒有合約紀錄。
-                        <button className="btn-secondary text-xs ml-2" onClick={() => setPage && setPage("contracts")}>
-                          → 去合約管理新增
-                        </button>
+                      <div className="space-y-2">
+                        <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                          此物件在 {year} 年度沒有合約紀錄。可以手動補金額(適用土地租金、停車位、其他無合約租賃):
+                        </div>
+                        <div className="p-3 rounded text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                          <label className="flex items-center gap-2 cursor-pointer mb-2">
+                            <input type="checkbox" checked={override?.totalAnnualRent !== undefined}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  updateRentOverride(p.id, { totalAnnualRent: 0, manualType: "general" });
+                                } else {
+                                  updateRentOverride(p.id, {
+                                    totalAnnualRent: undefined,
+                                    annualRent: undefined,
+                                    generalAnnualRent: undefined,
+                                    publicAnnualRent: undefined,
+                                    manualType: undefined,
+                                  });
+                                }
+                              }} />
+                            <span className="font-medium">手動補列當年度租金</span>
+                          </label>
+
+                          {override?.totalAnnualRent !== undefined && (
+                            <div className="ml-5 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <span style={{ minWidth: "85px" }}>類型:</span>
+                                <div className="flex gap-1">
+                                  <label className={`px-2 py-1 rounded cursor-pointer text-xs border ${(override.manualType || "general") === "general" ? "border-2 font-medium" : ""}`}
+                                    style={{
+                                      borderColor: (override.manualType || "general") === "general" ? "var(--gold)" : "var(--line)",
+                                      background: (override.manualType || "general") === "general" ? "#fef9ec" : "white"
+                                    }}>
+                                    <input type="radio" name={`mtype_${p.id}`} className="mr-1"
+                                      checked={(override.manualType || "general") === "general"}
+                                      onChange={() => updateRentOverride(p.id, { manualType: "general" })} />
+                                    一般 (43% 費用率)
+                                  </label>
+                                  <label className={`px-2 py-1 rounded cursor-pointer text-xs border ${override.manualType === "public" ? "border-2 font-medium" : ""}`}
+                                    style={{
+                                      borderColor: override.manualType === "public" ? "var(--green)" : "var(--line)",
+                                      background: override.manualType === "public" ? "var(--green-soft)" : "white"
+                                    }}>
+                                    <input type="radio" name={`mtype_${p.id}`} className="mr-1"
+                                      checked={override.manualType === "public"}
+                                      onChange={() => updateRentOverride(p.id, { manualType: "public" })} />
+                                    公益 (15k/月免稅+60%)
+                                  </label>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span style={{ minWidth: "85px" }}>全年總租金:</span>
+                                <div className="w-40">
+                                  <SumInput value={override.totalAnnualRent}
+                                    onChange={v => updateRentOverride(p.id, { totalAnnualRent: v })} />
+                                </div>
+                                <button className="btn-secondary text-[10px] ml-auto" onClick={() => clearRentOverride(p.id)}>↻ 清除</button>
+                              </div>
+                              <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                                ⓘ 適用情境:土地租金、停車位、未簽紙本合約的口頭租賃等。
+                                填入金額後會直接計入今年度應稅。
+                              </div>
+                              {/* 應稅顯示 */}
+                              {override.totalAnnualRent > 0 && (
+                                <div className="p-2 rounded" style={{ background: "var(--green-soft)", border: "1px solid var(--green)" }}>
+                                  <div className="flex justify-between">
+                                    <span>本物件本年度應稅</span>
+                                    <span className="num font-medium">{fmt(taxableTotal)}</span>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ) : (
                       <>
