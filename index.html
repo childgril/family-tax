@@ -903,6 +903,9 @@ function computeTaxForFiling(filing, members, year) {
   const incomeFromEntries = {};     // { memberId: { salary, interest, dividend, rental, other } }
   let interest5A = 0;               // 5A 金融機構利息 (適用儲蓄投資扣除額)
   let has5BEntries = false;         // 是否有 5B 利息 (用於 UI 提示)
+  // 區分:享 8.5% 抵減的股利 (54/54C) vs 不享的營利所得 (71D/71G/71M/54Y/等)
+  let dividend54Total = 0;          // 享抵減的部分 (54/54C)
+  let dividendOtherTotal = 0;       // 不享抵減的營利所得
   (filing.incomeEntries || []).forEach(e => {
     if (!e.ownerId) return;
     const cat = INCOME_CATEGORIES[e.category];
@@ -917,6 +920,14 @@ function computeTaxForFiling(filing, members, year) {
     if (e.category === "interest") {
       if (e.code === "5A") interest5A += net;
       else if (e.code === "5B") has5BEntries = true;
+    }
+    // 區分股利類:54/54C 可享 8.5% 抵減,其他營利所得 (71D 等) 不享
+    if (e.category === "dividend") {
+      if (codeQualifiesFor85Credit(e.code)) {
+        dividend54Total += net;
+      } else {
+        dividendOtherTotal += net;
+      }
     }
   });
 
@@ -1079,17 +1090,22 @@ function computeTaxForFiling(filing, members, year) {
   // 規則 (所得稅法第 15 條第 4 項):
   //   合併計稅: 股利全額併入綜所,但可用「股利 × 8.5%」抵減稅額,每戶上限 80,000
   //   分開計稅: 股利不併入綜所,單獨用 28% 課稅 (適用高所得者,本系統暫不支援自動切換)
+  //   ⚠ 只有 54/54C (公司、合作社、法人 87 年後盈餘) 享抵減,
+  //   71D 小規模查定、71G 信託、71M 緩課、54Y 其他營利 — 不享抵減,須併入綜所一般課稅
   // 預設採用「合併計稅,享 8.5% 抵減」
   const dividendChoice = filing.dividendChoice || "combine"; // combine | separate
   let dividendCredit = 0;
   let dividendSeparateTax = 0;
+  // dividend54Total / dividendOtherTotal 已在前面從 entries 累計
+  // 若 entries 為空,只能假設整個 dividend 都是 54C 享抵減 (向下相容)
+  const hasDividendEntries = (filing.incomeEntries || []).some(e => e.category === "dividend");
+  const dividendCreditable = hasDividendEntries ? dividend54Total : dividend;
+  const dividendNonCreditable = hasDividendEntries ? dividendOtherTotal : 0;
   if (dividendChoice === "combine") {
-    dividendCredit = Math.min(Math.round(dividend * 0.085), 80000);
+    dividendCredit = Math.min(Math.round(dividendCreditable * 0.085), 80000);
   } else if (dividendChoice === "separate") {
-    // 分開計稅: 股利不併入 (但目前 grossIncome 已含股利,要回退)
-    // 簡化: dividend 已在 grossIncome 內,分開算需從 netIncome 減去股利再算稅,加上股利*28%
-    // 但這牽涉到誰算淨額誰算分離,複雜度高,先以最簡化處理
-    dividendSeparateTax = Math.round(dividend * 0.28);
+    // 分開計稅: 只能用 54/54C 部分分開,71D 等強制併入
+    dividendSeparateTax = Math.round(dividendCreditable * 0.28);
   }
 
   // === 7.6 已扣繳稅額 / 重購自用住宅退稅 / 其他可扣抵 ===
@@ -1223,6 +1239,9 @@ function computeTaxForFiling(filing, members, year) {
     dividendChoice,
     dividendCredit,
     dividendSeparateTax,
+    dividend54: dividendCreditable,        // 享 8.5% 抵減的部分 (54/54C)
+    dividendOther: dividendNonCreditable,  // 不享抵減的營利所得 (71D/71G/71M/54Y)
+    hasDividendEntries,                    // UI 提示用
     repurchaseCredit,
     otherCredit,
     totalCreditsBeforePrepaid,
@@ -4599,8 +4618,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   股利併入綜所;可用「股利 × 8.5%」抵減稅額,上限 80,000 / 戶
                 </div>
                 <div className="text-xs ml-5 mt-1 num" style={{ color: "var(--accent-deep)" }}>
-                  本戶可抵減: {fmt(Math.min(Math.round(result.dividend * 0.085), 80000))}
+                  本戶可抵減: {fmt(Math.min(Math.round((result.dividend54 || result.dividend) * 0.085), 80000))}
                 </div>
+                {result.dividendOther > 0 && (
+                  <div className="text-[10px] ml-5 mt-1" style={{ color: "var(--gold)" }}>
+                    ⚠ 71D/71G 等營利所得 {fmt(result.dividendOther)} 不享抵減 (已扣除)
+                  </div>
+                )}
               </label>
               <label className={`p-3 rounded cursor-pointer border ${filing.dividendChoice === "separate" ? "border-2" : ""}`}
                 style={{ borderColor: filing.dividendChoice === "separate" ? "var(--accent)" : "var(--line)", background: filing.dividendChoice === "separate" ? "#fafaf6" : "white" }}>
@@ -4612,7 +4636,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   股利單獨用 28% 課稅 (適用高所得者,稅率 30%+ 時)
                 </div>
                 <div className="text-xs ml-5 mt-1 num" style={{ color: "var(--ink-mute)" }}>
-                  分離稅額: {fmt(Math.round(result.dividend * 0.28))}
+                  分離稅額: {fmt(Math.round((result.dividend54 || result.dividend) * 0.28))}
                 </div>
               </label>
             </div>
@@ -5394,7 +5418,35 @@ function CombinedIncomeCell({ entriesValue, manualValue, onChangeManual, width }
   );
 }
 
-// 渲染單一筆所得列 (用在 IncomeEntriesTable 內,可重複使用以支援按成員分組)
+// 代號 → 類別 (用於使用者手動輸入代號時自動推斷類別)
+function inferCategoryFromCode(code) {
+  if (!code) return null;
+  const c = String(code).trim().toUpperCase();
+  // 薪資
+  if (c.startsWith("50")) return "salary";
+  // 利息類 (5A 5B 5C 60 61)
+  if (c === "5A" || c === "5B" || c === "5C" || c === "60" || c === "61") return "interest";
+  // 營利/股利 (54 / 54C / 54Y / 71D / 71G / 71M)
+  if (c.startsWith("54") || c === "71D" || c === "71G" || c === "71M") return "dividend";
+  // 海外/大陸 71 (一般) / 73
+  if (c === "71" || c === "73") return "dividend";  // 也屬營利,但要小心是否享 8.5%
+  // 租賃
+  if (c.startsWith("51")) return "rental";
+  // 執行業務
+  if (c === "9A" || c === "9B") return "executive";
+  // 其他
+  if (["53","76","76W","87","90","91","92","93","94","95","96","97"].includes(c)) return "other";
+  return null;  // 不認得 → 保持原狀
+}
+
+// 判斷某代號對應的所得是否享「股利 8.5% 可抵減稅額」
+// 法源:所得稅法第15條 — 只有 54/54C (公司、合作社、法人 87年以後盈餘) 享抵減
+// 71D 小規模、71G 信託、71M 緩課、54Y 其他、71 海外、73 海外利息 — 不享抵減
+function codeQualifiesFor85Credit(code) {
+  if (!code) return true;  // 預設假設享 (沒填代號時保守)
+  const c = String(code).trim().toUpperCase();
+  return c === "54" || c === "54C";
+}
 function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
   const cat = CATEGORIES[e.category];
   const net = computeEntryNet(e);
@@ -5410,7 +5462,16 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
       </td>
       <td className="px-2 py-1">
         <input className="input-text-plain text-xs w-full" value={e.code || ""}
-          onChange={ev => onUpdate(e.id, { code: ev.target.value })}
+          onChange={ev => {
+            const newCode = ev.target.value;
+            const inferred = inferCategoryFromCode(newCode);
+            // 如果代號可推斷出類別,且跟目前不同,就一起更新
+            if (inferred && inferred !== e.category) {
+              onUpdate(e.id, { code: newCode, category: inferred });
+            } else {
+              onUpdate(e.id, { code: newCode });
+            }
+          }}
           placeholder={`${cat?.defaultCode || "代號"} (可手填)`} list={`codes_${e.id}`} />
         <datalist id={`codes_${e.id}`}>
           {Object.entries(CODES).map(([code, info]) => (
