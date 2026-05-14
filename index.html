@@ -109,6 +109,34 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // 稅務參數資料 (依年度)
 // ============================================================
 const TAX_PARAMS = {
+  115: {
+    label: "115年度 (116年5月申報) ★ 預估,以官方公告為準",
+    exemption: 101000,
+    exemptionElder: 151500,
+    standardSingle: 136000,
+    standardCouple: 272000,
+    salaryDeduction: 227000,
+    disabilityDeduction: 227000,
+    educationDeduction: 25000,
+    preschoolFirst: 150000,
+    preschoolOther: 225000,
+    longTermCare: 180000,         // 114起追溯提高
+    savingsDeduction: 270000,
+    rentDeduction: 180000,
+    basicLivingExp: 213000,       // 待官方公告 (暫沿用114年數值,實際值可能於 116年11月公告)
+    insuranceLimit: 24000,
+    mortgageLimit: 300000,
+    rentExpenseRatio: 0.43,
+    publicLandlordExempt: 15000,
+    publicLandlordExpense: 0.60,
+    brackets: [
+      { upTo: 610000, rate: 0.05, deduct: 0 },
+      { upTo: 1380000, rate: 0.12, deduct: 42700 },
+      { upTo: 2770000, rate: 0.20, deduct: 153100 },
+      { upTo: 5190000, rate: 0.30, deduct: 430100 },
+      { upTo: Infinity, rate: 0.40, deduct: 949100 },
+    ],
+  },
   114: {
     label: "114年度 (115年5月申報)",
     exemption: 97000,           // 一般免稅額
@@ -120,7 +148,7 @@ const TAX_PARAMS = {
     educationDeduction: 25000,  // 教育學費扣除額(每人)
     preschoolFirst: 150000,     // 幼兒學前扣除額(第一名,5歲以下)
     preschoolOther: 225000,     // 幼兒學前扣除額(第二名以上)
-    longTermCare: 120000,       // 長期照顧扣除額
+    longTermCare: 180000,       // 114年追溯提高至 180,000 (原 120,000)
     savingsDeduction: 270000,   // 儲蓄投資扣除額上限
     rentDeduction: 180000,      // 房屋租金支出特別扣除額上限
     basicLivingExp: 213000,     // 基本生活費(每人)
@@ -193,9 +221,65 @@ const TAX_PARAMS = {
       { upTo: Infinity, rate: 0.40, deduct: 864000 },
     ],
   },
+  111: {
+    label: "111年度 (112年5月申報)",
+    exemption: 92000,
+    exemptionElder: 138000,
+    standardSingle: 124000,
+    standardCouple: 248000,
+    salaryDeduction: 207000,
+    disabilityDeduction: 207000,
+    educationDeduction: 25000,
+    preschoolFirst: 120000,
+    preschoolOther: 120000,
+    longTermCare: 120000,
+    savingsDeduction: 270000,
+    rentDeduction: 120000,
+    basicLivingExp: 196000,
+    insuranceLimit: 24000,
+    mortgageLimit: 300000,
+    rentExpenseRatio: 0.43,
+    publicLandlordExempt: 15000,
+    publicLandlordExpense: 0.60,
+    brackets: [
+      { upTo: 560000, rate: 0.05, deduct: 0 },
+      { upTo: 1260000, rate: 0.12, deduct: 39200 },
+      { upTo: 2520000, rate: 0.20, deduct: 140000 },
+      { upTo: 4720000, rate: 0.30, deduct: 392000 },
+      { upTo: Infinity, rate: 0.40, deduct: 864000 },
+    ],
+  },
+  110: {
+    label: "110年度 (111年5月申報)",
+    exemption: 88000,
+    exemptionElder: 132000,
+    standardSingle: 120000,
+    standardCouple: 240000,
+    salaryDeduction: 200000,
+    disabilityDeduction: 200000,
+    educationDeduction: 25000,
+    preschoolFirst: 120000,
+    preschoolOther: 120000,
+    longTermCare: 120000,
+    savingsDeduction: 270000,
+    rentDeduction: 120000,
+    basicLivingExp: 197000,
+    insuranceLimit: 24000,
+    mortgageLimit: 300000,
+    rentExpenseRatio: 0.43,
+    publicLandlordExempt: 10000, // 110 年舊規定為 10,000 (111年起調為 15,000)
+    publicLandlordExpense: 0.60,
+    brackets: [
+      { upTo: 540000, rate: 0.05, deduct: 0 },
+      { upTo: 1210000, rate: 0.12, deduct: 37800 },
+      { upTo: 2420000, rate: 0.20, deduct: 134600 },
+      { upTo: 4530000, rate: 0.30, deduct: 376600 },
+      { upTo: Infinity, rate: 0.40, deduct: 829900 },
+    ],
+  },
 };
 const DEFAULT_YEAR = 114;
-const AVAILABLE_YEARS = [114, 113, 112];
+const AVAILABLE_YEARS = [115, 114, 113, 112, 111, 110];
 
 // ============================================================
 // 親屬關係分類 (依所得稅法第 17 條)
