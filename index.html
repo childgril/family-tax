@@ -4172,8 +4172,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
       {/* 各成員所得輸入 */}
       <div className="card">
-        <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
-          ① INCOME · 各成員所得
+        <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+          <div className="ornament">① INCOME · 各成員所得</div>
+          {incomeEntries.length > 0 && (
+            <div className="text-[10px]" style={{ color: "var(--green)" }}>
+              ✓ 自動從上方「逐筆所得明細」帶入,下方輸入框可額外補加
+            </div>
+          )}
         </div>
         <div className="p-5">
           <table className="w-full text-sm">
@@ -4195,6 +4200,18 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides));
                 const myRental = computeRentalIncome(myComputable, params);
                 const includedCount = myComputable.length;
+                // 從 entries 算這位成員的各類別所得
+                const memberEntries = incomeEntries.filter(e => e.ownerId === m.id);
+                const entrySum = (cat) => memberEntries
+                  .filter(e => e.category === cat)
+                  .reduce((s, e) => s + computeEntryNet(e), 0);
+                const fromEntriesSalary = entrySum("salary");
+                const fromEntriesInterest = entrySum("interest");
+                const fromEntriesDividend = entrySum("dividend");
+                const fromEntriesOther = entrySum("executive") + entrySum("other");
+                const showEntryHint = (val) => val > 0
+                  ? <div className="text-[10px]" style={{ color: "var(--green)" }}>📑 +{fmt(val)}</div>
+                  : null;
                 return (
                   <tr key={m.id} className="table-row">
                     <td className="py-2 font-medium">
@@ -4207,18 +4224,21 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       <div className="w-28 inline-block">
                         <SumInput value={income.salary}
                           onChange={v => updateIncome(m.id, "salary", v)} />
+                        {showEntryHint(fromEntriesSalary)}
                       </div>
                     </td>
                     <td className="py-2 text-right">
                       <div className="w-24 inline-block">
                         <SumInput value={income.interest}
                           onChange={v => updateIncome(m.id, "interest", v)} />
+                        {showEntryHint(fromEntriesInterest)}
                       </div>
                     </td>
                     <td className="py-2 text-right">
                       <div className="w-24 inline-block">
                         <SumInput value={income.dividend}
                           onChange={v => updateIncome(m.id, "dividend", v)} />
+                        {showEntryHint(fromEntriesDividend)}
                       </div>
                     </td>
                     <td className="py-2 text-right num text-xs" title={myComputable.map(p => p.name).join(", ")}>
@@ -4231,6 +4251,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       <div className="w-24 inline-block">
                         <SumInput value={income.other}
                           onChange={v => updateIncome(m.id, "other", v)} />
+                        {showEntryHint(fromEntriesOther)}
                       </div>
                     </td>
                   </tr>
@@ -4276,39 +4297,17 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
                     系統自動套用 = min(全戶利息, {fmt(params.savingsDeduction)})。
                     <br />
-                    ⚠ 若你的利息包含郵局存簿、公債、公司債、保險公司利息(5B)等<b>不適用</b>項目,請勾選下方覆寫,或改用「📑 所得明細逐筆輸入」並區分 5A / 5B。
+                    ⚠ 若你的利息包含郵局存簿、公債、公司債、保險公司利息(5B)等<b>不適用</b>項目,請改用「📑 所得明細逐筆輸入」並區分 5A / 5B,系統會自動排除不適用利息。
                   </div>
                 )}
-                {filing.savingsOverride ? (
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className="text-xs">手動指定金額:</span>
-                    <input type="number" className="input-text w-32 text-right"
-                      value={filing.savingsOverrideAmount || 0}
-                      onChange={e => onChange({ ...filing, savingsOverrideAmount: Number(e.target.value) || 0 })} />
-                    <span className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                      上限 {fmt(params.savingsDeduction)}
-                    </span>
-                  </div>
-                ) : null}
               </div>
               <div className="text-right">
                 <div className="text-xs" style={{ color: "var(--ink-mute)" }}>實際採用</div>
                 <div className="font-serif text-2xl num" style={{ color: "var(--accent-deep)" }}>
                   {fmt(result.savings)}
                 </div>
-                {filing.savingsOverride && result.savings !== result.savingsAuto && (
-                  <div className="text-xs" style={{ color: "var(--gold)" }}>
-                    (覆寫,自動值 {fmt(result.savingsAuto)})
-                  </div>
-                )}
               </div>
             </div>
-            <label className="flex items-center gap-2 mt-3 cursor-pointer text-xs">
-              <input type="checkbox"
-                checked={!!filing.savingsOverride}
-                onChange={e => onChange({ ...filing, savingsOverride: e.target.checked })} />
-              <span>手動覆寫儲蓄投資扣除額 (排除不適用利息)</span>
-            </label>
           </div>
         </div>
       </div>
@@ -4499,16 +4498,35 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             </div>
           </div>
 
-          {/* 其他抵減 */}
+          {/* 已扣繳 (自動帶入,只讀) + 其他抵減 */}
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>已預扣繳稅額</label>
-              <input type="number" className="input-text w-full text-right"
-                value={filing.taxCredits?.prepaidTax || ""}
-                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, prepaidTax: Number(e.target.value) || 0 } })} />
-              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
-                薪資/利息/租賃等扣繳憑單上的「扣繳稅額」合計
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>已預扣繳稅額(自動)</label>
+              <div className="input-text w-full text-right num" style={{ background: "#fafaf6", color: "var(--green)" }}>
+                {fmt(result.prepaidTax || 0)}
               </div>
+              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+                自動從上方「📑 所得明細」的扣繳稅額合計
+                {(() => {
+                  const entriesTotal = (filing.incomeEntries || []).reduce((s, e) => s + toNum(e.withholding), 0);
+                  const manualPrepaid = toNum(filing.taxCredits?.prepaidTax);
+                  if (manualPrepaid > 0) return <> + 手動補加 {fmt(manualPrepaid)}</>;
+                  return null;
+                })()}
+              </div>
+              {/* 給有需要的人提供「手動補加」 — 收合 */}
+              <details className="mt-1">
+                <summary className="text-[10px] cursor-pointer" style={{ color: "var(--ink-mute)" }}>
+                  ▸ 需要手動補加(極罕見)
+                </summary>
+                <input type="number" className="input-text w-full text-right mt-1"
+                  value={filing.taxCredits?.prepaidTax || ""}
+                  placeholder="0"
+                  onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, prepaidTax: Number(e.target.value) || 0 } })} />
+                <div className="text-[10px] mt-1" style={{ color: "var(--ink-mute)" }}>
+                  扣繳憑單不在所得明細的(例:暫繳)
+                </div>
+              </details>
             </div>
             <div>
               <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>重購自用住宅退稅</label>
@@ -4537,8 +4555,8 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         <TaxMethodsPanel result={result} filing={filing} onChange={onChange} />
       )}
 
-      {/* 試算結果 */}
-      <ResultPanel result={result} year={year} members={members} filing={filing} />
+      {/* 結算申報書 (試算結果) */}
+      <OfficialFormView result={result} year={year} filing={filing} />
 
       {/* 本戶租賃 — 合約自動攤分,每物件可展開查看與手動覆寫 */}
       {householdProperties.length > 0 && (
@@ -5222,14 +5240,106 @@ function TaxMethodsPanel({ result, filing, onChange }) {
 // ============================================================
 // 逐筆所得明細表格 (依官方結算申報書格式)
 // ============================================================
+// 渲染單一筆所得列 (用在 IncomeEntriesTable 內,可重複使用以支援按成員分組)
+function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
+  const cat = CATEGORIES[e.category];
+  const net = computeEntryNet(e);
+  return (
+    <tr key={e.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+      <td className="px-2 py-1">
+        <select className="input-text-plain text-xs w-full" value={e.category}
+          onChange={ev => onUpdate(e.id, { category: ev.target.value, code: CATEGORIES[ev.target.value]?.defaultCode || "" })}>
+          {Object.entries(CATEGORIES).map(([k, c]) => (
+            <option key={k} value={k}>{c.label}</option>
+          ))}
+        </select>
+      </td>
+      <td className="px-2 py-1">
+        <input className="input-text-plain text-xs w-full" value={e.code || ""}
+          onChange={ev => onUpdate(e.id, { code: ev.target.value })}
+          placeholder={cat?.defaultCode} list={`codes_${e.id}`} />
+        <datalist id={`codes_${e.id}`}>
+          {Object.entries(CODES).map(([code, info]) => (
+            <option key={code} value={code}>{info.name}</option>
+          ))}
+        </datalist>
+        {e.category === "interest" && (
+          <div className="text-[9px] mt-0.5">
+            {e.code === "5A" && <span style={{ color: "var(--green)" }}>✓ 享儲蓄扣除</span>}
+            {e.code === "5B" && <span style={{ color: "var(--gold)" }}>✗ 不享儲蓄扣除</span>}
+          </div>
+        )}
+      </td>
+      <td className="px-2 py-1">
+        <input className="input-text-plain text-xs w-full" value={e.source || ""}
+          onChange={ev => onUpdate(e.id, { source: ev.target.value })}
+          placeholder="例:鴻海精密工業股份有限公司" />
+      </td>
+      <td className="px-2 py-1">
+        <input className="input-text-plain text-xs w-full num" value={e.taxId || ""}
+          onChange={ev => onUpdate(e.id, { taxId: ev.target.value })}
+          placeholder="統編" />
+      </td>
+      <td className="px-2 py-1">
+        <select className="input-text-plain text-xs w-full" value={e.ownerId || ""}
+          onChange={ev => onUpdate(e.id, { ownerId: ev.target.value })}>
+          <option value="">—</option>
+          {(members || []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      </td>
+      <td className="px-2 py-1">
+        <SumInput value={e.gross} onChange={v => onUpdate(e.id, { gross: v })} />
+      </td>
+      <td className="px-2 py-1">
+        {(() => {
+          const needsExpenseInput = (
+            (e.category === "rental" && (e.code === "51L" || e.code === "51I" || e.code === "51J" || e.code === "51K")) ||
+            (e.category === "executive") ||
+            (e.category === "rental" && e.code === "51" && toNum(e.expense) > 0)
+          );
+          if (needsExpenseInput) {
+            return <SumInput value={e.expense} onChange={v => onUpdate(e.id, { expense: v })} />;
+          }
+          return (
+            <div className="text-right text-[10px] num" style={{ color: "var(--ink-mute)" }}>
+              {e.category === "rental" && e.code === "51" && toNum(e.gross) > 0
+                ? `自動 43% (${fmt(Math.round(toNum(e.gross) * 0.43))})`
+                : "—"}
+            </div>
+          );
+        })()}
+      </td>
+      <td className="px-2 py-1 text-right num font-medium" style={{ background: "#fdfcf7" }}>
+        {fmt(net)}
+      </td>
+      <td className="px-2 py-1">
+        <SumInput value={e.withholding} onChange={v => onUpdate(e.id, { withholding: v })} />
+      </td>
+      <td className="px-2 py-1 text-center">
+        <button className="text-red-600 text-xs hover:underline" onClick={() => onRemove(e.id)}>×</button>
+      </td>
+    </tr>
+  );
+}
+
 function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
   const [expanded, setExpanded] = React.useState(entries.length > 0);
   const [filter, setFilter] = React.useState("all");
+  const [memberFilter, setMemberFilter] = React.useState("all");
+  const [groupByMember, setGroupByMember] = React.useState(true);
 
   // 依類別分類
   const grouped = entries.reduce((acc, e) => {
     if (!acc[e.category]) acc[e.category] = [];
     acc[e.category].push(e);
+    return acc;
+  }, {});
+
+  // 依成員分類
+  const groupedByMember = entries.reduce((acc, e) => {
+    const key = e.ownerId || "_unassigned";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(e);
     return acc;
   }, {});
 
@@ -5244,7 +5354,24 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
   const netTotal = totals.reduce((s, t) => s + t.netSum, 0);
   const withTotal = totals.reduce((s, t) => s + t.withSum, 0);
 
-  const visibleEntries = filter === "all" ? entries : entries.filter(e => e.category === filter);
+  // 每個成員的小計
+  const memberSummary = (members || []).map(m => {
+    const items = groupedByMember[m.id] || [];
+    const salary = items.filter(e => e.category === "salary").reduce((s, e) => s + computeEntryNet(e), 0);
+    const interest = items.filter(e => e.category === "interest").reduce((s, e) => s + computeEntryNet(e), 0);
+    const dividend = items.filter(e => e.category === "dividend").reduce((s, e) => s + computeEntryNet(e), 0);
+    const rental = items.filter(e => e.category === "rental").reduce((s, e) => s + computeEntryNet(e), 0);
+    const other = items.filter(e => ["executive", "other"].includes(e.category)).reduce((s, e) => s + computeEntryNet(e), 0);
+    const withhold = items.reduce((s, e) => s + toNum(e.withholding), 0);
+    return { member: m, count: items.length, salary, interest, dividend, rental, other, withhold, total: salary + interest + dividend + rental + other };
+  }).filter(s => s.count > 0);
+
+  // 篩選 (類別 + 成員)
+  const visibleEntries = entries.filter(e => {
+    if (filter !== "all" && e.category !== filter) return false;
+    if (memberFilter !== "all" && e.ownerId !== memberFilter) return false;
+    return true;
+  });
 
   return (
     <div className="card">
@@ -5290,7 +5417,52 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                     </button>
                   );
                 })}
+                <span className="border-l mx-2" style={{ borderColor: "var(--line)" }}></span>
+                <button className={`btn-secondary text-xs ${memberFilter === "all" ? "border-2" : ""}`}
+                  style={memberFilter === "all" ? { borderColor: "var(--green)" } : {}}
+                  onClick={() => setMemberFilter("all")}>
+                  全部成員
+                </button>
+                {memberSummary.map(s => (
+                  <button key={s.member.id}
+                    className={`btn-secondary text-xs ${memberFilter === s.member.id ? "border-2" : ""}`}
+                    style={memberFilter === s.member.id ? { borderColor: "var(--green)" } : {}}
+                    onClick={() => setMemberFilter(s.member.id)}>
+                    👤 {s.member.name} ({s.count})
+                  </button>
+                ))}
+                <span className="ml-auto"></span>
+                <label className="flex items-center gap-1 text-[10px] cursor-pointer">
+                  <input type="checkbox" checked={groupByMember}
+                    onChange={e => setGroupByMember(e.target.checked)} />
+                  按成員分組顯示
+                </label>
               </div>
+
+              {/* 每個成員的所得小計卡片 */}
+              {memberSummary.length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
+                  {memberSummary.map(s => (
+                    <div key={s.member.id} className="p-2 rounded text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                      <div className="font-medium mb-1 flex items-center justify-between">
+                        <span>👤 {s.member.name}</span>
+                        <span className="num text-[10px]" style={{ color: "var(--ink-mute)" }}>共 {s.count} 筆</span>
+                      </div>
+                      <div className="space-y-0.5 num text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        {s.salary > 0 && <div className="flex justify-between"><span>薪資</span><span>{fmt(s.salary)}</span></div>}
+                        {s.interest > 0 && <div className="flex justify-between"><span>利息</span><span>{fmt(s.interest)}</span></div>}
+                        {s.dividend > 0 && <div className="flex justify-between"><span>股利</span><span>{fmt(s.dividend)}</span></div>}
+                        {s.rental > 0 && <div className="flex justify-between"><span>租賃</span><span>{fmt(s.rental)}</span></div>}
+                        {s.other > 0 && <div className="flex justify-between"><span>執業/其他</span><span>{fmt(s.other)}</span></div>}
+                        {s.withhold > 0 && <div className="flex justify-between" style={{ color: "var(--green)" }}><span>扣繳</span><span>{fmt(s.withhold)}</span></div>}
+                        <div className="flex justify-between font-medium pt-1 border-t" style={{ borderColor: "var(--line)" }}>
+                          <span>所得合計</span><span>{fmt(s.total)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="overflow-x-auto">
                 <table className="w-full text-xs" style={{ minWidth: "1000px" }}>
@@ -5309,87 +5481,38 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleEntries.map(e => {
-                      const cat = INCOME_CATEGORIES[e.category];
-                      const net = computeEntryNet(e);
-                      return (
-                        <tr key={e.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
-                          <td className="px-2 py-1">
-                            <select className="input-text-plain text-xs w-full" value={e.category}
-                              onChange={ev => onUpdate(e.id, { category: ev.target.value, code: INCOME_CATEGORIES[ev.target.value]?.defaultCode || "" })}>
-                              {Object.entries(INCOME_CATEGORIES).map(([k, c]) => (
-                                <option key={k} value={k}>{c.label}</option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="px-2 py-1">
-                            <input className="input-text-plain text-xs w-full" value={e.code || ""}
-                              onChange={ev => onUpdate(e.id, { code: ev.target.value })}
-                              placeholder={cat?.defaultCode} list={`codes_${e.id}`} />
-                            <datalist id={`codes_${e.id}`}>
-                              {Object.entries(INCOME_CODES).map(([code, info]) => (
-                                <option key={code} value={code}>{info.name}</option>
-                              ))}
-                            </datalist>
-                            {e.category === "interest" && (
-                              <div className="text-[9px] mt-0.5">
-                                {e.code === "5A" && <span style={{ color: "var(--green)" }}>✓ 享儲蓄扣除</span>}
-                                {e.code === "5B" && <span style={{ color: "var(--gold)" }}>✗ 不享儲蓄扣除</span>}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-2 py-1">
-                            <input className="input-text-plain text-xs w-full" value={e.source || ""}
-                              onChange={ev => onUpdate(e.id, { source: ev.target.value })}
-                              placeholder="例:鴻海精密工業股份有限公司" />
-                          </td>
-                          <td className="px-2 py-1">
-                            <input className="input-text-plain text-xs w-full num" value={e.taxId || ""}
-                              onChange={ev => onUpdate(e.id, { taxId: ev.target.value })}
-                              placeholder="統編" />
-                          </td>
-                          <td className="px-2 py-1">
-                            <select className="input-text-plain text-xs w-full" value={e.ownerId || ""}
-                              onChange={ev => onUpdate(e.id, { ownerId: ev.target.value })}>
-                              <option value="">—</option>
-                              {(members || []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                            </select>
-                          </td>
-                          <td className="px-2 py-1">
-                            <SumInput value={e.gross} onChange={v => onUpdate(e.id, { gross: v })} />
-                          </td>
-                          <td className="px-2 py-1">
-                            {(() => {
-                              // 哪些代號允許/需要使用者輸入費用?
-                              const needsExpenseInput = (
-                                (e.category === "rental" && (e.code === "51L" || e.code === "51I" || e.code === "51J" || e.code === "51K")) ||
-                                (e.category === "executive") ||
-                                (e.category === "rental" && e.code === "51" && toNum(e.expense) > 0)
-                              );
-                              if (needsExpenseInput) {
-                                return <SumInput value={e.expense} onChange={v => onUpdate(e.id, { expense: v })} />;
-                              }
-                              return (
-                                <div className="text-right text-[10px] num" style={{ color: "var(--ink-mute)" }}>
-                                  {e.category === "rental" && e.code === "51" && toNum(e.gross) > 0
-                                    ? `自動 43% (${fmt(Math.round(toNum(e.gross) * 0.43))})`
-                                    : "—"}
-                                </div>
-                              );
-                            })()}
-                          </td>
-                          <td className="px-2 py-1 text-right num font-medium" style={{ background: "#fdfcf7" }}>
-                            {fmt(net)}
-                          </td>
-                          <td className="px-2 py-1">
-                            <SumInput value={e.withholding} onChange={v => onUpdate(e.id, { withholding: v })} />
-                          </td>
-                          <td className="px-2 py-1 text-center">
-                            <button className="text-red-600 text-xs hover:underline" onClick={() => onRemove(e.id)}>×</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {(() => {
+                      // 如果勾選分組,先按成員分;否則按原順序
+                      if (!groupByMember) {
+                        return visibleEntries.map(e => renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove));
+                      }
+                      // 按成員分組:把同一成員的列放一起,中間插分隔列
+                      const memberGroups = {};
+                      visibleEntries.forEach(e => {
+                        const k = e.ownerId || "_unassigned";
+                        if (!memberGroups[k]) memberGroups[k] = [];
+                        memberGroups[k].push(e);
+                      });
+                      // 排序:按 members 順序
+                      const orderedKeys = (members || []).map(m => m.id).filter(id => memberGroups[id]);
+                      if (memberGroups["_unassigned"]) orderedKeys.push("_unassigned");
+                      const rows = [];
+                      orderedKeys.forEach(key => {
+                        const m = (members || []).find(mm => mm.id === key);
+                        const label = m ? m.name : "(未指定歸戶)";
+                        const grpItems = memberGroups[key];
+                        const grpTotal = grpItems.reduce((s, e) => s + computeEntryNet(e), 0);
+                        rows.push(
+                          <tr key={`hdr_${key}`} style={{ background: "#f0ede2" }}>
+                            <td colSpan={10} className="px-3 py-1.5 text-xs font-medium" style={{ color: "var(--accent-deep)" }}>
+                              👤 {label} <span className="font-normal num ml-2" style={{ color: "var(--ink-mute)" }}>· 共 {grpItems.length} 筆 · 所得合計 {fmt(grpTotal)}</span>
+                            </td>
+                          </tr>
+                        );
+                        grpItems.forEach(e => rows.push(renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove)));
+                      });
+                      return rows;
+                    })()}
                   </tbody>
                   <tfoot>
                     <tr style={{ background: "#fafaf6", borderTop: "2px solid var(--ink)" }}>
@@ -5507,13 +5630,29 @@ function OfficialFormView({ result, year, filing }) {
 
   return (
     <div className="card mb-4" style={{ background: "white" }}>
-      <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+      <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
         <div>
           <div className="ornament" style={{ color: "var(--accent-deep)" }}>OFFICIAL FORM VIEW</div>
           <div className="font-serif text-base">📋 {year} 年度結算申報書(試算)</div>
+          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+            參照財政部「綜合所得稅結算申報試算通知書」格式
+          </div>
         </div>
-        <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-          參照財政部「綜合所得稅結算申報試算通知書」格式
+        <div className="text-right">
+          <div className="ornament" style={{ color: finalDue > 0 ? "var(--ink)" : finalDue < 0 ? "var(--green)" : "var(--ink-mute)" }}>
+            {finalDue > 0 ? `YEAR ${year} TAX TO PAY` : finalDue < 0 ? `YEAR ${year} TAX REFUND` : "BALANCED"}
+          </div>
+          <div className="font-serif num" style={{
+            fontSize: "32px",
+            fontWeight: 500,
+            color: finalDue > 0 ? "var(--ink)" : finalDue < 0 ? "var(--green)" : "var(--ink-mute)",
+            lineHeight: 1.1,
+          }}>
+            {fmt(Math.abs(finalDue))}
+          </div>
+          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+            {finalDue > 0 ? "應補繳稅額" : finalDue < 0 ? "可退稅金額" : "無補繳無退稅"} (新臺幣 元)
+          </div>
         </div>
       </div>
 
@@ -5748,10 +5887,6 @@ function ResultPanel({ result, year, members, filing }) {
   const mainName = mainMember ? mainMember.name : "本人";
 
   return (
-    <>
-    {/* 申報書格式總覽 (近似官方結算申報書) */}
-    <OfficialFormView result={result} year={year} filing={filing} />
-
     <div className="card" style={{ background: "#fdfcf7", borderColor: "var(--accent)" }}>
       <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)", color: "var(--accent-deep)" }}>
         ⑤ RESULT · 稅額試算結果 · 採用「{chosen ? chosen.label : "全部合併"}」
@@ -5886,7 +6021,6 @@ function ResultPanel({ result, year, members, filing }) {
         </div>
       </div>
     </div>
-    </>
   );
 }
 
