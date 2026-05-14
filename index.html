@@ -4377,7 +4377,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
               return (
                 <details key={p.id} className="rounded" open={hasContracts} style={{ background: isIncluded ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
-                  <summary className="px-3 py-2 flex items-center gap-3 cursor-pointer">
+                  <summary className="px-3 py-2 flex items-center gap-3 cursor-pointer rounded-t" style={{
+                    background: hasContracts && isIncluded ? "var(--green-soft, #f5fbef)" : "transparent",
+                    borderBottom: hasContracts && isIncluded ? "1px solid var(--green)" : "none",
+                  }}>
                     <span className="chevron text-xs" style={{ color: "var(--ink-mute)" }}>▸</span>
                     {hasContracts ? (
                       <input type="checkbox" checked={isIncluded}
@@ -4493,7 +4496,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                               </div>
                               {/* 應稅顯示 */}
                               {override.totalAnnualRent > 0 && (
-                                <div className="p-2 rounded" style={{ background: "var(--green-soft)", border: "1px solid var(--green)" }}>
+                                <div className="p-2 rounded" style={{ background: "#f5f5f0", border: "1px solid var(--line)" }}>
                                   <div className="flex justify-between">
                                     <span>本物件本年度應稅</span>
                                     <span className="num font-medium">{fmt(taxableTotal)}</span>
@@ -4690,7 +4693,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                         </div>
 
                         {/* 應稅計算結果 */}
-                        <div className="mt-2 p-2 rounded text-xs" style={{ background: agg.hasMixedType ? "#fef9ec" : "#f5fbef", border: `1px solid ${agg.hasMixedType ? "var(--gold)" : "var(--green)"}` }}>
+                        <div className="mt-2 p-2 rounded text-xs" style={{ background: "#f5f5f0", border: "1px solid var(--line)" }}>
                           <div className="font-medium mb-1">應稅租金所得計算</div>
                           {computables.map((c, i) => {
                             const ci = computeRentalIncome([c], params).breakdown[0];
@@ -5022,15 +5025,15 @@ function ResultPanel({ result, year, members }) {
           <div className="flex flex-col justify-between">
             <div>
               <div className="text-center p-6 rounded mb-4" style={{
-                background: result.finalDue >= 0 ? "var(--ink)" : "var(--green)",
+                background: result.finalDue > 0 ? "var(--ink)" : (result.finalDue < 0 ? "var(--green)" : "#8a8578"),
                 color: "white"
               }}>
                 <div className="ornament" style={{ color: "#a8a293" }}>
-                  YEAR {year} {result.finalDue >= 0 ? "TAX TO PAY" : "TAX REFUND"}
+                  YEAR {year} {result.finalDue > 0 ? "TAX TO PAY" : result.finalDue < 0 ? "TAX REFUND" : "BALANCED"}
                 </div>
                 <div className="font-serif text-5xl num mt-2">{fmt(Math.abs(result.finalDue))}</div>
                 <div className="text-xs mt-2" style={{ color: "#a8a293" }}>
-                  {result.finalDue >= 0 ? "應補繳稅額" : "可退稅"} (新臺幣 元)
+                  {result.finalDue > 0 ? "應補繳稅額" : result.finalDue < 0 ? "可退稅金額" : "剛好平衡 · 無補繳無退稅"} (新臺幣 元)
                 </div>
               </div>
 
@@ -5048,10 +5051,18 @@ function ResultPanel({ result, year, members }) {
                       <span>− 已預扣繳</span><span className="num">{fmt(result.prepaidTax)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between border-t pt-1 mt-1 font-medium" style={{ borderColor: "var(--line)" }}>
-                    <span>{result.finalDue >= 0 ? "應補繳" : "應退稅"}</span>
+                  <div className="flex justify-between border-t pt-1 mt-1 font-medium" style={{
+                    borderColor: "var(--line)",
+                    color: result.finalDue > 0 ? "var(--ink)" : result.finalDue < 0 ? "var(--green)" : "var(--ink-mute)"
+                  }}>
+                    <span>{result.finalDue > 0 ? "應補繳" : result.finalDue < 0 ? "應退稅" : "平衡 (無補退)"}</span>
                     <span className="num">{fmt(Math.abs(result.finalDue))}</span>
                   </div>
+                  {result.finalDue === 0 && result.prepaidTax === 0 && result.tax === 0 && (
+                    <div className="text-[10px] mt-1 p-1.5 rounded" style={{ background: "white", color: "var(--ink-mute)" }}>
+                      ⓘ 應稅額 = 0 且未填預扣繳。請確認:① 上方各成員是否填薪資 / 利息 / 股利;② 區塊 ③ 「已預扣繳稅額」是否要填(扣繳憑單上有)
+                    </div>
+                  )}
                 </div>
               </div>
 
