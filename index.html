@@ -1366,6 +1366,23 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
 
   const overrideKey = `${propertyId}_${year}`;
   const override = (manualOverrides || {})[overrideKey] || {};
+  const byContract = override.byContract || {};
+
+  // 把 byContract 套用到 breakdown 上 (每份合約的 appliedRent)
+  breakdown.forEach(item => {
+    const m = byContract[item.contractId];
+    if (m !== undefined && m !== "" && m !== null) {
+      item.manualRent = toNum(m);
+      item.appliedRent = toNum(m);
+      item.isAdjusted = true;
+    } else {
+      item.manualRent = null;       // 沒手動調整
+      item.appliedRent = item.rent; // 用合約原算的
+      item.isAdjusted = false;
+    }
+  });
+
+  // 老版本「整體手動覆寫」邏輯:仍可運作(優先 byContract,若沒則用 totalAnnualRent)
   let manualTotal = null;
   if (override.totalAnnualRent !== undefined) {
     manualTotal = toNum(override.totalAnnualRent);
@@ -1375,10 +1392,21 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
     manualTotal = toNum(override.generalAnnualRent || 0) + toNum(override.publicAnnualRent || 0);
   }
 
-  const appliedPublicRent = publicRent;
-  const appliedGeneralRent = manualTotal !== null
-    ? Math.max(0, manualTotal - publicRent)
-    : generalRent;
+  // 若有逐合約調整,整個物件的 appliedAnnualRent = 各合約 appliedRent 加總
+  const hasPerContractAdjust = breakdown.some(i => i.isAdjusted);
+
+  // 計算「物件級套用」: 若用 byContract,則直接加總每合約 appliedRent
+  let appliedPublicRent, appliedGeneralRent;
+  if (hasPerContractAdjust) {
+    appliedPublicRent = breakdown.filter(i => i.isPublic).reduce((s, i) => s + (i.appliedRent || 0), 0);
+    appliedGeneralRent = breakdown.filter(i => !i.isPublic).reduce((s, i) => s + (i.appliedRent || 0), 0);
+  } else if (manualTotal !== null) {
+    appliedPublicRent = publicRent;
+    appliedGeneralRent = Math.max(0, manualTotal - publicRent);
+  } else {
+    appliedPublicRent = publicRent;
+    appliedGeneralRent = generalRent;
+  }
 
   return {
     contracts: breakdown,
@@ -1386,8 +1414,9 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
     publicRent,
     generalRent,
     computedAnnualRent: totalRent,
-    manualOverride: manualTotal !== null,
+    manualOverride: manualTotal !== null || hasPerContractAdjust,
     manualTotal,
+    hasPerContractAdjust,
     manualIncludeInFiling: override.includeInFiling !== false,
     appliedPublicRent,
     appliedGeneralRent,
@@ -1438,9 +1467,10 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
 
       const out = [];
 
-      // === 公益部分: 無論是否手動覆寫,公益都依合約自動 (逐份合約獨立) ===
+      // === 公益部分: 逐份公益合約獨立 (如有手動調整則用 appliedRent) ===
       const publicContractsForYear = agg.contracts.filter(c => c.isPublic);
       publicContractsForYear.forEach(c => {
+        const annual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
         out.push({
           id: `pub_${c.contractId}_${year}`,
           name: `${property.name} · ${c.tenantName} (公益)`,
@@ -1449,17 +1479,39 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
           type: "public",
           monthlyRent: c.monthly,
           months: c.months,
-          annualRentDirect: c.rent,
+          annualRentDirect: annual,
           expenseRatio: 0.43,
-          note: `公益出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月`,
+          note: `公益出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月${c.isAdjusted ? " · 手動" : ""}`,
           _fromContract: true,
         });
       });
 
       // === 一般部分 ===
       const isLandAsset = property.assetType === "land";
-      if (agg.manualTotal !== null) {
-        // 手動模式: 一般部分 = 全年總租金 − 公益部分
+      // 優先: 逐合約手動調整
+      if (agg.hasPerContractAdjust) {
+        const generalContracts = agg.contracts.filter(c => !c.isPublic);
+        generalContracts.forEach(c => {
+          const annual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+          out.push({
+            id: `gen_${c.contractId}_${year}`,
+            name: `${property.name} · ${c.tenantName}${isLandAsset ? " (土地)" : ""}`,
+            address: property.address,
+            ownerId: property.ownerId,
+            type: isLandAsset ? "land" : "general",
+            monthlyRent: c.monthly,
+            months: c.months,
+            annualRentDirect: annual,
+            landTax: toNum(property.landTax || 0),
+            expenseRatio: 0.43,
+            note: isLandAsset
+              ? `土地·${c.period}${c.isAdjusted ? " · 手動" : ""} · 地價稅 ${fmt(toNum(property.landTax || 0))}`
+              : `一般出租 · ${c.period}${c.isAdjusted ? " · 手動" : ""}`,
+            _fromContract: true,
+          });
+        });
+      } else if (agg.manualTotal !== null) {
+        // 舊版相容: 物件級手動覆寫
         if (agg.appliedGeneralRent > 0) {
           const generalContracts = agg.contracts.filter(c => !c.isPublic);
           const generalTotalMonths = generalContracts.reduce((s, c) => s + c.months, 0) || 12;
@@ -1496,7 +1548,7 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
             landTax: toNum(property.landTax || 0),
             expenseRatio: 0.43,
             note: isLandAsset
-              ? `土地出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月 · 地價稅 ${fmt(toNum(property.landTax || 0))}`
+              ? `土地出租 · ${c.period} · 地價稅 ${fmt(toNum(property.landTax || 0))}`
               : `一般出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月`,
             _fromContract: true,
           });
@@ -4837,11 +4889,12 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       </div>
                     ) : (
                       <>
-                        {/* 合約攤分明細 (整合手動調整 + 應稅計算) */}
+                        {/* 合約攤分明細 (整合手動調整 + 原應稅 + 調整後應稅) */}
                         <div className="text-xs font-medium mb-2" style={{ color: "var(--ink-soft)" }}>
-                          合約攤分明細 ({agg.contracts.length} 份)
+                          合約攤分明細 ({agg.contracts.length} 份) · <span style={{ color: "var(--ink-mute)" }}>手動調整欄留空 = 用原合約算</span>
                         </div>
-                        <table className="w-full text-xs">
+                        <div className="overflow-x-auto">
+                        <table className="w-full text-xs" style={{ minWidth: "900px" }}>
                           <thead>
                             <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
                               <th className="text-left px-2 py-1 font-medium">租客</th>
@@ -4849,17 +4902,33 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                               <th className="text-center px-2 py-1 font-medium">月數</th>
                               <th className="text-right px-2 py-1 font-medium">月租</th>
                               <th className="text-right px-2 py-1 font-medium">當年度租金</th>
+                              <th className="text-right px-2 py-1 font-medium" style={{ minWidth: "110px", background: "#fef9ec" }}>手動調整租金</th>
+                              <th className="text-right px-2 py-1 font-medium" style={{ minWidth: "100px" }}>原應稅</th>
+                              <th className="text-right px-2 py-1 font-medium" style={{ minWidth: "100px", background: "#f5fbef" }}>調整後應稅</th>
                               <th className="text-center px-2 py-1 font-medium">類型</th>
-                              <th className="text-right px-2 py-1 font-medium" style={{ minWidth: "90px" }}>應稅租金</th>
                             </tr>
                           </thead>
                           <tbody>
                             {agg.contracts.filter(c => c.months > 0).map(c => {
-                              // 對應的 computable 算稅
-                              const matchedComp = computables.find(co =>
-                                co._fromContract && (co.id?.includes(c.contractId) || co.note?.includes(c.tenantName))
-                              );
-                              const ci = matchedComp ? computeRentalIncome([matchedComp], params).breakdown[0] : null;
+                              // 原應稅: 用 rent 算
+                              const origComputable = {
+                                type: c.isPublic ? "public" : (p.assetType === "land" ? "land" : "general"),
+                                monthlyRent: c.monthly,
+                                months: c.months,
+                                annualRentDirect: c.rent,
+                                landTax: toNum(p.landTax || 0),
+                                expenseRatio: 0.43,
+                              };
+                              const origTax = computeRentalIncome([origComputable], params).breakdown[0]?.taxableIncome || 0;
+                              // 調整後應稅: 用 appliedRent 算 (若有調整)
+                              const adjustedComputable = {
+                                ...origComputable,
+                                annualRentDirect: c.appliedRent !== undefined ? c.appliedRent : c.rent,
+                              };
+                              const adjustedTax = c.isAdjusted
+                                ? computeRentalIncome([adjustedComputable], params).breakdown[0]?.taxableIncome || 0
+                                : origTax;
+
                               return (
                                 <tr key={c.contractId} style={{ borderBottom: "1px solid var(--line-soft)" }}>
                                   <td className="px-2 py-1">
@@ -4872,89 +4941,69 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                                   }</td>
                                   <td className="px-2 py-1 text-right num">{fmt(c.monthly)}</td>
                                   <td className="px-2 py-1 text-right num">{fmt(c.rent)}</td>
+                                  <td className="px-2 py-1 text-right" style={{ background: "#fef9ec" }}>
+                                    <input
+                                      type="number"
+                                      className="input-text-plain text-xs w-20 text-right"
+                                      value={c.manualRent !== null && c.manualRent !== undefined ? c.manualRent : ""}
+                                      placeholder="留空 = 原值"
+                                      onChange={e => {
+                                        const val = e.target.value;
+                                        const cur = (filing.manualRentOverrides?.[`${p.id}_${year}`]?.byContract) || {};
+                                        let newByContract;
+                                        if (val === "" || val === null) {
+                                          // 清除該合約調整
+                                          newByContract = { ...cur };
+                                          delete newByContract[c.contractId];
+                                        } else {
+                                          newByContract = { ...cur, [c.contractId]: Number(val) || 0 };
+                                        }
+                                        updateRentOverride(p.id, { byContract: newByContract });
+                                      }}
+                                    />
+                                  </td>
+                                  <td className="px-2 py-1 text-right num" style={{ color: c.isAdjusted ? "var(--ink-mute)" : "var(--accent-deep)", textDecoration: c.isAdjusted ? "line-through" : "none" }}>
+                                    {fmt(origTax)}
+                                  </td>
+                                  <td className="px-2 py-1 text-right num font-medium" style={{ background: "#f5fbef", color: c.isAdjusted ? "var(--green)" : "var(--accent-deep)" }}>
+                                    {fmt(adjustedTax)}
+                                  </td>
                                   <td className="px-2 py-1 text-center">
                                     {c.isPublic ? <span className="chip chip-green text-[10px]">公益</span> : <span className="chip chip-amber text-[10px]">一般</span>}
-                                  </td>
-                                  <td className="px-2 py-1 text-right num font-medium" style={{ color: "var(--accent-deep)" }}>
-                                    {ci ? fmt(ci.taxableIncome) : "—"}
                                   </td>
                                 </tr>
                               );
                             })}
 
-                            {/* 手動調整列 (整合進表格,展開時可編輯) */}
-                            <tr style={{ background: override?.totalAnnualRent !== undefined ? "#fef9ec" : "#fafaf6", borderTop: "1px solid var(--line)" }}>
-                              <td colSpan={4} className="px-2 py-1.5">
-                                <label className="flex items-center gap-2 cursor-pointer text-[11px]">
-                                  <input type="checkbox" checked={override?.totalAnnualRent !== undefined}
-                                    onChange={e => {
-                                      if (e.target.checked) {
-                                        updateRentOverride(p.id, { totalAnnualRent: agg.computedAnnualRent });
-                                      } else {
-                                        updateRentOverride(p.id, {
-                                          totalAnnualRent: undefined,
-                                          annualRent: undefined,
-                                          generalAnnualRent: undefined,
-                                          publicAnnualRent: undefined
-                                        });
-                                      }
-                                    }} />
-                                  <span className="font-medium">手動調整租金</span>
-                                  <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                                    (系統自動扣公益)
-                                  </span>
-                                </label>
-                              </td>
-                              <td className="px-2 py-1 text-right">
-                                {override?.totalAnnualRent !== undefined ? (
-                                  <input type="number"
-                                    className="input-text w-24 text-right text-xs"
-                                    value={override.totalAnnualRent || ""}
-                                    placeholder="0"
-                                    onChange={e => updateRentOverride(p.id, { totalAnnualRent: Number(e.target.value) || 0 })} />
-                                ) : (
-                                  <span style={{ color: "var(--ink-mute)" }}>—</span>
-                                )}
-                              </td>
-                              <td className="px-2 py-1 text-center">
-                                {override?.totalAnnualRent !== undefined &&
-                                  <span className="text-[10px]" style={{ color: "var(--gold)" }}>已調整</span>
-                                }
-                              </td>
-                              <td className="px-2 py-1 text-right num text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                                {override?.totalAnnualRent !== undefined && agg.appliedGeneralRent !== undefined && (
-                                  <>一般 {fmt(agg.appliedGeneralRent)}</>
-                                )}
-                              </td>
-                            </tr>
-
                             {/* 合計列 */}
                             <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
                               <td colSpan={4} className="px-2 py-2 text-right font-medium">合計</td>
-                              <td className="px-2 py-2 text-right num font-medium">
-                                {fmt(override?.totalAnnualRent !== undefined ? agg.manualTotal : agg.computedAnnualRent)}
+                              <td className="px-2 py-2 text-right num font-medium">{fmt(agg.computedAnnualRent)}</td>
+                              <td className="px-2 py-2 text-right num font-medium" style={{ background: "#fef9ec" }}>
+                                {agg.hasPerContractAdjust ? fmt(agg.appliedAnnualRent) : <span style={{ color: "var(--ink-mute)" }}>—</span>}
                               </td>
-                              <td className="px-2 py-2 text-center text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                                {agg.publicRent > 0 && agg.generalRent > 0
-                                  ? `公益+一般`
-                                  : ""}
+                              <td className="px-2 py-2 text-right num" style={{ color: "var(--ink-mute)" }}>
+                                {/* 全部原應稅合計 */}
+                                {(() => {
+                                  const total = agg.contracts.filter(c => c.months > 0).reduce((s, c) => {
+                                    const oc = {
+                                      type: c.isPublic ? "public" : (p.assetType === "land" ? "land" : "general"),
+                                      monthlyRent: c.monthly, months: c.months,
+                                      annualRentDirect: c.rent, landTax: toNum(p.landTax || 0), expenseRatio: 0.43,
+                                    };
+                                    return s + (computeRentalIncome([oc], params).breakdown[0]?.taxableIncome || 0);
+                                  }, 0);
+                                  return fmt(total);
+                                })()}
                               </td>
-                              <td className="px-2 py-2 text-right num font-medium" style={{ color: "var(--accent-deep)", fontSize: "13px" }}>
+                              <td className="px-2 py-2 text-right num font-medium" style={{ background: "#f5fbef", color: "var(--green)", fontSize: "13px" }}>
                                 {fmt(taxableTotal)}
                               </td>
+                              <td></td>
                             </tr>
                           </tbody>
                         </table>
-
-                        {/* 手動調整時的解釋(只在啟用時顯示) */}
-                        {override?.totalAnnualRent !== undefined && agg.appliedPublicRent > 0 && (
-                          <div className="mt-2 p-2 rounded text-[11px]" style={{ background: "white", border: "1px dashed var(--gold)" }}>
-                            <div className="num">
-                              手動 {fmt(agg.manualTotal)} − 公益 {fmt(agg.appliedPublicRent)}(自動)= 一般 {fmt(agg.appliedGeneralRent)}
-                              {agg.appliedGeneralRent < 0 && <span style={{ color: "var(--gold)" }} className="ml-2">⚠ 一般部分視為 0</span>}
-                            </div>
-                          </div>
-                        )}
+                        </div>
 
                         {/* 月份覆蓋條 */}
                         {(() => {
