@@ -947,8 +947,12 @@ function computeTaxForFiling(filing, members, year) {
   const disaster = toNum(itemized.disaster);                   // 災害損失
   const mortgageInterest = toNum(itemized.mortgageInterest);   // 自用住宅購屋借款利息
 
-  // 捐贈上限: 一般捐贈不得超過綜合所得總額 20%
-  const donationGeneralCapped = Math.min(donationGeneral, grossIncome * 0.20);
+  // 捐贈上限: 一般捐贈不得超過「綜合所得總額」 20%
+  // 注意:官方申報書「綜合所得總額」是「薪資已扣特扣後」的數字,所以 20% 上限要用扣完薪資特扣的金額
+  // 例: 薪資 717,978 + 其他 178,200 = 895,408 (毛); 申報書綜所總額 = 895,408 - 207,000 = 688,408
+  //     20% 上限 = 688,408 × 0.2 ≈ 137,682
+  const grossIncomeForDonation = grossIncome - salaryDeductible;
+  const donationGeneralCapped = Math.min(donationGeneral, grossIncomeForDonation * 0.20);
   // 保險費上限: 每人 24,000 (申報戶成員人數)
   const insurancePersonalCapped = Math.min(insurancePersonal, filers.length * params.insuranceLimit);
   // 自用住宅購屋借款利息: 實際利息 - 儲蓄投資扣除後餘額,上限 30 萬
@@ -5416,11 +5420,24 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
 function OfficialFormView({ result, year, filing }) {
   if (!result || !result.params) return null;
   // 拿關鍵數字 (全部加 || 0 防 undefined)
-  const grossIncome = result.grossIncome || 0;
+  // ⚠ 注意:官方申報書「綜合所得總額」是「薪資扣特扣後」,而系統內 grossIncome 是「未扣前」
+  //   為了跟官方申報書一致,這裡用「申報書邏輯」呈現:
+  //   - 顯示用綜合所得總額 = grossIncome - salarySD (薪資扣完才併入)
+  //   - 顯示用扣除額 = 一般扣除 + 儲蓄 + 身障 + 教育 + 幼兒 + 長照 + 房屋 (不含薪資特扣)
+  const grossIncomeRaw = result.grossIncome || 0;
+  const salarySD = result.salarySD || 0;
+  const grossIncome = grossIncomeRaw - salarySD;  // 申報書版「綜合所得總額」(薪資已扣完特扣)
   const exemption = result.exemption || 0;
   const generalDeduction = (result.useItemized ? result.itemizedTotal : result.standardDeduction) || 0;
-  const specialTotal = result.specialTotal || 0;
-  const totalDeduction = generalDeduction + specialTotal;
+  // 申報書版「扣除額」= 一般 + 儲蓄 + 身障 + 教育 + 幼兒 + 長照 + 房屋 (不含薪資特扣)
+  const savings = result.savings || 0;
+  const disabilityDed = result.disabilityDed || 0;
+  const educationDed = result.educationDed || 0;
+  const preschoolDed = result.preschoolDed || 0;
+  const longTermCareDed = result.longTermCareDed || 0;
+  const rentDeductActual = result.rentDeductActual || 0;
+  const specialTotalForForm = savings + disabilityDed + educationDed + preschoolDed + longTermCareDed + rentDeductActual;
+  const totalDeduction = generalDeduction + specialTotalForForm;
   const blDiff = result.blDiff || 0;
   const netIncome = result.netIncome || 0;
   const rate = result.taxRate || 0;
@@ -5436,9 +5453,10 @@ function OfficialFormView({ result, year, filing }) {
   const blTotal = result.blTotal || 0;
   const blcompare = result.blcompare || 0;
   const interest = result.interest || 0;
-  const savings = result.savings || 0;
   const dividend = result.dividend || 0;
   const itemizedDeductions = filing.itemizedDeductions || {};
+  // 為了在「綜合所得總額」旁顯示 sub 提示
+  const grossSub = salarySD > 0 ? `薪資 ${fmt(grossIncomeRaw)} − 薪資特扣 ${fmt(salarySD)}` : null;
 
   return (
     <div className="card mb-4" style={{ background: "white" }}>
@@ -5462,11 +5480,11 @@ function OfficialFormView({ result, year, filing }) {
             {/* 第一列: 綜所淨額 */}
             <div className="flex flex-wrap items-end gap-x-2 gap-y-2 mb-3 num">
               <span>(</span>
-              <FormulaCell label="綜合所得總額" value={grossIncome} />
+              <FormulaCell label="綜合所得總額" value={grossIncome} sub={grossSub} />
               <span className="font-bold">−</span>
               <FormulaCell label="全部免稅額" value={exemption} />
               <span className="font-bold">−</span>
-              <FormulaCell label="全部扣除額" value={totalDeduction} sub={`一般 ${fmt(generalDeduction)} + 特扣 ${fmt(specialTotal)}`} />
+              <FormulaCell label="全部扣除額" value={totalDeduction} sub={`一般 ${fmt(generalDeduction)} + 特扣(不含薪資) ${fmt(specialTotalForForm)}`} />
               <span className="font-bold">−</span>
               <FormulaCell label="基本生活費差額" value={blDiff} />
               <span>)</span>
@@ -5479,6 +5497,7 @@ function OfficialFormView({ result, year, filing }) {
             </div>
             <div className="text-xs num" style={{ color: "var(--ink-mute)" }}>
               綜合所得淨額 = {fmt(netIncome)} (若小於 0 則以 0 計算)
+              {salarySD > 0 && <span className="ml-2">· 採用申報書邏輯:薪資特扣 {fmt(salarySD)} 已於「綜合所得總額」前扣除</span>}
             </div>
           </div>
 
