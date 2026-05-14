@@ -1570,12 +1570,12 @@ function saveData(data) {
 // ============================================================
 const NAV_ITEMS = [
   { id: "dashboard", label: "儀表板", icon: "◉", desc: "Overview" },
-  { id: "members",   label: "家庭成員", icon: "❀", desc: "Family Members" },
+  { id: "filing",    label: "本年度試算", icon: "✎", desc: "Tax Filing" },
   { id: "properties",label: "出租物件", icon: "▤", desc: "Rental Properties" },
   { id: "contracts", label: "租賃合約", icon: "▦", desc: "Lease Contracts" },
-  { id: "filing",    label: "本年度試算", icon: "✎", desc: "Tax Filing" },
   { id: "compare",   label: "扣除額比較", icon: "⚖", desc: "Deduction Compare" },
   { id: "history",   label: "歷史紀錄", icon: "❡", desc: "History" },
+  { id: "members",   label: "家庭成員", icon: "❀", desc: "Family Members" },
   { id: "sources",   label: "資料來源指引", icon: "❓", desc: "Field Sources" },
   { id: "data",      label: "資料管理", icon: "⛁", desc: "Backup & Restore" },
   { id: "help",      label: "稅務參考", icon: "?", desc: "Tax Reference" },
@@ -4474,7 +4474,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
       )}
 
       {/* 試算結果 */}
-      <ResultPanel result={result} year={year} members={members} />
+      <ResultPanel result={result} year={year} members={members} filing={filing} />
 
       {/* 本戶租賃 — 合約自動攤分,每物件可展開查看與手動覆寫 */}
       {householdProperties.length > 0 && (
@@ -5636,7 +5636,7 @@ function FormulaCell({ label, value, sub, highlight, muted, refund }) {
   );
 }
 
-function ResultPanel({ result, year, members }) {
+function ResultPanel({ result, year, members, filing }) {
   if (!result) return null;
   const chosen = result.chosenMethod;
   const isSplit = chosen && chosen.formula && (chosen.formula.type === "allSep" || chosen.formula.type === "salarySep");
