@@ -1085,7 +1085,23 @@ function computeTaxForFiling(filing, members, year) {
     filers,
     taxpayerId: filing.taxpayerId,
     spouseId: filing.spouseId,
-    memberIncome: filing.memberIncome || {},
+    memberIncome: (() => {
+      // 把 memberIncome 跟 incomeFromEntries 合併 (entries 優先)
+      // 確保 computeAllTaxMethods 跑 5 種稅法時也能用逐筆明細的數字
+      const merged = {};
+      filers.forEach(m => {
+        const orig = filing.memberIncome?.[m.id] || {};
+        const fromEnt = incomeFromEntries[m.id] || {};
+        merged[m.id] = {
+          salary: fromEnt.salary !== undefined ? fromEnt.salary : toNum(orig.salary),
+          interest: fromEnt.interest !== undefined ? fromEnt.interest : toNum(orig.interest),
+          dividend: fromEnt.dividend !== undefined ? fromEnt.dividend : toNum(orig.dividend),
+          other: (fromEnt.other !== undefined ? fromEnt.other : toNum(orig.other))
+                 + (fromEnt._rental_entries || 0),  // 把租賃 entries 算成「其他」(避免雙重計算合約)
+        };
+      });
+      return merged;
+    })(),
     householdProperties: (filing.properties || []),
     rentalRecords: filing.rentalRecords || [],
     contracts: filing.contracts || [],
