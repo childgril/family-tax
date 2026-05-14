@@ -2053,10 +2053,18 @@ function Dashboard({ data, year, setPage }) {
                     </td>
                     <td className="px-5 py-3 text-right num font-serif text-base">
                       {(() => {
-                        const fd = r.finalDue || 0;
+                        const sysFd = r.finalDue || 0;
+                        const actualAmt = f.actualSettlement?.actualAmount;
+                        const hasActual = actualAmt !== undefined && actualAmt !== "" && actualAmt !== null;
+                        const fd = hasActual ? toNum(actualAmt) : sysFd;
                         const color = fd > 0 ? "var(--ink)" : fd < 0 ? "var(--green)" : "var(--ink-mute)";
                         const prefix = fd > 0 ? "" : fd < 0 ? "−" : "";
-                        return <span style={{ color }}>{prefix}{fmt(Math.abs(fd))}</span>;
+                        return (
+                          <span style={{ color }}>
+                            {prefix}{fmt(Math.abs(fd))}
+                            {hasActual && <span className="chip chip-green text-[9px] ml-1">實際</span>}
+                          </span>
+                        );
                       })()}
                     </td>
                   </tr>
@@ -4104,6 +4112,14 @@ function FilingPage({ data, setData, year, setPage }) {
         repurchaseCredit: 0,
         otherCredit: 0,
       },
+      // 實際結算: 申報後實際繳/退稅金額 (跟系統試算可能差幾元)
+      actualSettlement: {
+        actualAmount: "",       // 實際繳/退金額 (正數 = 補繳, 負數 = 退稅, 空白 = 用系統試算值)
+        actualDate: "",         // 實際繳費或收到退稅日期
+        note: "",
+      },
+      // 事後調整 (補繳、罰金、利息、複查通知書等)
+      adjustments: [],
     };
     setData({ ...data, filings: [...data.filings, newFiling] });
     setSelectedId(newFiling.id);
@@ -4182,12 +4198,46 @@ function FilingPage({ data, setData, year, setPage }) {
                     );
                   })()}
                   {r && (() => {
-                    const fd = r.finalDue || 0;
-                    const label = fd > 0 ? "應補繳" : fd < 0 ? "可退稅" : "平衡";
-                    const color = fd > 0 ? "var(--ink)" : fd < 0 ? "var(--green)" : "var(--ink-mute)";
+                    const sysFinalDue = r.finalDue || 0;
+                    const actualAmt = f.actualSettlement?.actualAmount;
+                    const hasActual = actualAmt !== undefined && actualAmt !== "" && actualAmt !== null;
+                    const displayAmount = hasActual ? toNum(actualAmt) : sysFinalDue;
+                    const label = displayAmount > 0 ? "應補繳" : displayAmount < 0 ? "可退稅" : "平衡";
+                    const color = displayAmount > 0 ? "var(--ink)" : displayAmount < 0 ? "var(--green)" : "var(--ink-mute)";
                     return (
-                      <div className="text-xs num mt-1" style={{ color }}>
-                        {label} <span className="font-medium">{fmt(Math.abs(fd))}</span>
+                      <div className="mt-1">
+                        <div className="text-xs num flex items-center gap-1" style={{ color }}>
+                          <span>{label}</span>
+                          <span className="font-medium">{fmt(Math.abs(displayAmount))}</span>
+                          {hasActual && <span className="chip chip-green text-[9px] ml-1">實際</span>}
+                        </div>
+                        {hasActual && Math.abs(toNum(actualAmt) - sysFinalDue) > 0 && (
+                          <div className="text-[9px] num" style={{ color: "var(--ink-mute)" }}>
+                            (系統算 {sysFinalDue >= 0 ? fmt(sysFinalDue) : `-${fmt(-sysFinalDue)}`})
+                          </div>
+                        )}
+                        {/* 點擊編輯實際金額 */}
+                        <button
+                          className="text-[9px] mt-0.5 hover:underline"
+                          style={{ color: "var(--ink-mute)" }}
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            const cur = hasActual ? actualAmt : sysFinalDue;
+                            const input = prompt(
+                              `輸入實際繳/退稅金額\n` +
+                              `(正數=補繳,負數=退稅;留空=用系統試算 ${sysFinalDue >= 0 ? fmt(sysFinalDue) : `-${fmt(-sysFinalDue)}`})\n` +
+                              `系統試算: ${sysFinalDue >= 0 ? `補繳 ${fmt(sysFinalDue)}` : `退稅 ${fmt(-sysFinalDue)}`}`,
+                              hasActual ? String(cur) : ""
+                            );
+                            if (input === null) return;
+                            const newFiling = { ...f };
+                            if (!newFiling.actualSettlement) newFiling.actualSettlement = {};
+                            newFiling.actualSettlement.actualAmount = input.trim();
+                            updateFiling(newFiling);
+                          }}
+                        >
+                          ✎ {hasActual ? "修改實際金額" : "輸入實際金額"}
+                        </button>
                       </div>
                     );
                   })()}
@@ -4963,6 +5013,9 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
       {/* 結算申報書 (試算結果) */}
       <OfficialFormView result={result} year={year} filing={filing} />
 
+      {/* ⑤ 實際結算與後續調整 */}
+      <SettlementPanel filing={filing} onChange={onChange} systemFinalDue={result.finalDue} />
+
       {/* 本戶租賃 — 合約自動攤分,每物件可展開查看與手動覆寫 */}
       {householdProperties.length > 0 && (
         <div className="card">
@@ -5524,6 +5577,283 @@ function DonationSimulator({ filing, result, params, onApplyDonation }) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function SettlementPanel({ filing, onChange, systemFinalDue }) {
+  const settlement = filing.actualSettlement || {};
+  const adjustments = filing.adjustments || [];
+  const ADJ_TYPES = {
+    "supplement": { label: "補繳稅額", chip: "chip-amber", desc: "國稅局查到漏報或補正,需補繳" },
+    "refund_received": { label: "實收退稅", chip: "chip-green", desc: "實際收到的退稅金額" },
+    "penalty": { label: "罰鍰", chip: "chip-red", desc: "漏報罰" },
+    "interest": { label: "利息", chip: "chip-amber", desc: "滯納利息" },
+    "other": { label: "其他", chip: "chip", desc: "" },
+  };
+  const updateSettlement = (patch) => {
+    onChange({ ...filing, actualSettlement: { ...settlement, ...patch } });
+  };
+  const addAdjustment = (preset = {}) => {
+    const adj = {
+      id: uid(),
+      date: "",
+      type: preset.type || "supplement",
+      amount: 0,
+      reason: "",
+      docNo: "",
+      docUrl: "",       // 國稅局電子公文連結
+      station: "",      // 承辦站號/分局/承辦人
+      note: "",
+      ...preset,
+    };
+    onChange({ ...filing, adjustments: [...adjustments, adj] });
+  };
+  const updateAdjustment = (id, patch) => {
+    onChange({ ...filing, adjustments: adjustments.map(a => a.id === id ? { ...a, ...patch } : a) });
+  };
+  const removeAdjustment = (id) => {
+    onChange({ ...filing, adjustments: adjustments.filter(a => a.id !== id) });
+  };
+
+  // 系統試算 vs 實際的差異
+  const sysFinal = systemFinalDue || 0;
+  const actualNum = settlement.actualAmount !== "" && settlement.actualAmount !== undefined && settlement.actualAmount !== null
+    ? toNum(settlement.actualAmount)
+    : null;
+  const hasActual = actualNum !== null;
+  // 後續調整加總
+  const adjTotal = adjustments.reduce((s, a) => {
+    const v = toNum(a.amount);
+    // supplement / penalty / interest 是「再繳」(+);refund_received 是「再收」(−)
+    if (a.type === "refund_received") return s - v;
+    return s + v;
+  }, 0);
+
+  return (
+    <div className="card">
+      <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+        <div className="ornament">⑤ SETTLEMENT · 實際結算與後續調整</div>
+        <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+          記錄實際繳/退金額(可能與系統試算差幾元四捨五入)+ 後續補繳/罰金
+        </div>
+      </div>
+      <div className="p-5 space-y-4">
+
+        {/* 實際結算 */}
+        <div className="p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+          <div className="text-xs font-medium mb-2" style={{ color: "var(--ink-soft)" }}>
+            ✓ 實際繳/退稅金額(政府寄來的繳款書或實收退稅)
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[10px] mb-1" style={{ color: "var(--ink-mute)" }}>
+                實際金額(正 = 補繳,負 = 退稅)
+              </label>
+              <input type="number"
+                className="input-text w-full text-right"
+                placeholder={`系統試算: ${sysFinal >= 0 ? fmt(sysFinal) : `-${fmt(-sysFinal)}`}`}
+                value={settlement.actualAmount || ""}
+                onChange={e => updateSettlement({ actualAmount: e.target.value })} />
+              {hasActual && (
+                <div className="text-[10px] mt-1 num" style={{ color: Math.abs(actualNum - sysFinal) < 5 ? "var(--green)" : "var(--gold)" }}>
+                  {Math.abs(actualNum - sysFinal) < 5
+                    ? `✓ 與系統試算僅差 ${fmt(actualNum - sysFinal)} 元 (四捨五入)`
+                    : `⚠ 與系統試算差 ${fmt(actualNum - sysFinal)} 元 (請檢查)`}
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="block text-[10px] mb-1" style={{ color: "var(--ink-mute)" }}>實際日期</label>
+              <input type="text"
+                className="input-text w-full"
+                placeholder="例: 112/5/30"
+                value={settlement.actualDate || ""}
+                onChange={e => updateSettlement({ actualDate: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-[10px] mb-1" style={{ color: "var(--ink-mute)" }}>備註</label>
+              <input type="text"
+                className="input-text w-full"
+                placeholder="例: 從信用卡分6期"
+                value={settlement.note || ""}
+                onChange={e => updateSettlement({ note: e.target.value })} />
+            </div>
+          </div>
+        </div>
+
+        {/* 後續調整(補繳、退稅、罰鍰、利息) */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-medium" style={{ color: "var(--ink-soft)" }}>
+              後續調整紀錄({adjustments.length} 筆)
+              {adjustments.length > 0 && (
+                <span className="ml-2 num" style={{ color: adjTotal > 0 ? "var(--accent-deep)" : "var(--green)" }}>
+                  · 合計 {adjTotal >= 0 ? "+" : ""}{fmt(adjTotal)} 元
+                </span>
+              )}
+            </div>
+            <div className="flex gap-1">
+              <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "supplement" })}>
+                + 補繳
+              </button>
+              <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "refund_received" })}>
+                + 實收退稅
+              </button>
+              <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "penalty" })}>
+                + 罰鍰
+              </button>
+              <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "interest" })}>
+                + 利息
+              </button>
+            </div>
+          </div>
+
+          {adjustments.length === 0 ? (
+            <div className="text-xs p-3 rounded text-center" style={{ background: "#fafaf6", color: "var(--ink-mute)" }}>
+              尚無調整紀錄。若申報後收到國稅局補繳通知、退稅單,可在上方按鈕新增。
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {adjustments.map(a => {
+                const t = ADJ_TYPES[a.type] || ADJ_TYPES.other;
+                const amtColor = a.type === "refund_received" ? "var(--green)" : "var(--accent-deep)";
+                return (
+                  <div key={a.id} className="p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                    {/* 第一列: 類型 / 日期 / 金額 / 刪除 */}
+                    <div className="flex items-center gap-2 mb-2">
+                      <select className="input-text-plain text-xs"
+                        style={{ minWidth: "100px" }}
+                        value={a.type}
+                        onChange={e => updateAdjustment(a.id, { type: e.target.value })}>
+                        {Object.entries(ADJ_TYPES).map(([k, v]) => (
+                          <option key={k} value={k}>{v.label}</option>
+                        ))}
+                      </select>
+                      <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>日期:</span>
+                      <input type="text"
+                        className="input-text-plain text-xs"
+                        style={{ width: "100px" }}
+                        placeholder="例: 112/8/15"
+                        value={a.date || ""}
+                        onChange={e => updateAdjustment(a.id, { date: e.target.value })} />
+                      <span className="text-[10px] ml-auto" style={{ color: "var(--ink-mute)" }}>金額:</span>
+                      <input type="number"
+                        className="input-text-plain text-xs text-right font-medium"
+                        style={{ width: "120px", color: amtColor, fontSize: "14px" }}
+                        placeholder="0"
+                        value={a.amount || ""}
+                        onChange={e => updateAdjustment(a.id, { amount: Number(e.target.value) || 0 })} />
+                      <button className="text-red-600 text-xs hover:underline ml-1"
+                        title="刪除此筆"
+                        onClick={() => removeAdjustment(a.id)}>×</button>
+                    </div>
+
+                    {/* 第二列: 原因 */}
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-[10px]" style={{ minWidth: "55px", color: "var(--ink-mute)" }}>原因/內容:</span>
+                      <input type="text"
+                        className="input-text-plain text-xs flex-1"
+                        placeholder="例: 漏報利息所得 5A 兆豐銀行,經核定補繳"
+                        value={a.reason || ""}
+                        onChange={e => updateAdjustment(a.id, { reason: e.target.value })} />
+                    </div>
+
+                    {/* 第三列: 公文文號 / 站號 / 公文連結 */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>公文文號:</span>
+                        <input type="text"
+                          className="input-text-plain text-xs flex-1 num"
+                          placeholder="例: 北稅核字第 1XXXXX 號"
+                          value={a.docNo || ""}
+                          onChange={e => updateAdjustment(a.id, { docNo: e.target.value })} />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>站號/承辦:</span>
+                        <input type="text"
+                          className="input-text-plain text-xs flex-1"
+                          placeholder="例: 北稅信義分局 02-2XXX"
+                          value={a.station || ""}
+                          onChange={e => updateAdjustment(a.id, { station: e.target.value })} />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>公文連結:</span>
+                        <input type="url"
+                          className="input-text-plain text-xs flex-1"
+                          placeholder="https://..."
+                          value={a.docUrl || ""}
+                          onChange={e => updateAdjustment(a.id, { docUrl: e.target.value })} />
+                        {a.docUrl && (
+                          <a href={a.docUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-[10px] hover:underline px-1"
+                            style={{ color: "var(--accent)" }}
+                            title="開啟連結">
+                            ↗
+                          </a>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 第四列: 備註 (optional, 可摺疊) */}
+                    {(a.note || a.showNote) && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className="text-[10px]" style={{ minWidth: "55px", color: "var(--ink-mute)" }}>備註:</span>
+                        <input type="text"
+                          className="input-text-plain text-xs flex-1"
+                          placeholder="其他補充"
+                          value={a.note || ""}
+                          onChange={e => updateAdjustment(a.id, { note: e.target.value })} />
+                      </div>
+                    )}
+                    {!a.note && !a.showNote && (
+                      <button className="text-[10px] mt-1 hover:underline"
+                        style={{ color: "var(--ink-mute)" }}
+                        onClick={() => updateAdjustment(a.id, { showNote: true })}>
+                        + 加備註
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="text-[10px] mt-2" style={{ color: "var(--ink-mute)" }}>
+            ⓘ 補繳 / 罰鍰 / 利息 = 再繳出去(正)· 實收退稅 = 收到錢(負)
+          </div>
+        </div>
+
+        {/* 總結 */}
+        {(hasActual || adjustments.length > 0) && (
+          <div className="p-3 rounded" style={{ background: "#fdfcf7", border: "1px solid var(--accent-soft)" }}>
+            <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>📊 本年度總實際稅務變動</div>
+            <table className="w-full text-xs num">
+              <tbody>
+                <tr><td className="py-0.5">系統試算</td>
+                    <td className="text-right">{sysFinal >= 0 ? `補繳 ${fmt(sysFinal)}` : `退稅 ${fmt(-sysFinal)}`}</td></tr>
+                {hasActual && (
+                  <tr><td className="py-0.5">實際結算</td>
+                      <td className="text-right">{actualNum >= 0 ? `補繳 ${fmt(actualNum)}` : `退稅 ${fmt(-actualNum)}`}</td></tr>
+                )}
+                {adjustments.length > 0 && (
+                  <tr><td className="py-0.5">後續調整合計</td>
+                      <td className="text-right">{adjTotal >= 0 ? `再繳 ${fmt(adjTotal)}` : `再收 ${fmt(-adjTotal)}`}</td></tr>
+                )}
+                <tr className="font-medium" style={{ borderTop: "1px solid var(--line)" }}>
+                  <td className="pt-1.5">最終本年度淨支出</td>
+                  <td className="text-right pt-1.5" style={{ fontSize: "14px", color: "var(--accent-deep)" }}>
+                    {(() => {
+                      const final = (hasActual ? actualNum : sysFinal) + adjTotal;
+                      return final >= 0 ? `補繳 ${fmt(final)}` : `退稅 ${fmt(-final)}`;
+                    })()}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
