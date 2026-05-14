@@ -5539,10 +5539,21 @@ function DeductionInput({ label, hint, value, onChange }) {
 }
 
 function TaxMethodsPanel({ result, filing, onChange }) {
-  const methods = result.taxMethods;
-  const best = result.bestMethod;
-  const chosen = result.chosenMethod;
+  const allMethods = result.taxMethods;
   const isAuto = (filing.taxMethod || "auto") === "auto";
+  // 預設只顯示「股利合併」(A 變體);打勾才顯示「股利分開 28%」(B 變體)
+  const allBest = result.bestMethod;
+  const chosen = result.chosenMethod;
+  const [showSeparateB, setShowSeparateB] = React.useState(
+    // 若 best 或 chosen 是 B 變體,預設打開讓使用者看到
+    (allBest?.dividendChoice === "separate") || (chosen?.dividendChoice === "separate")
+  );
+  const methods = showSeparateB
+    ? allMethods
+    : allMethods.filter(m => m.dividendChoice !== "separate");
+  // 顯示用 best:在當前可見的方法中選最低
+  const best = methods.reduce((b, m) => (!b || m.finalDue < b.finalDue) ? m : b, null);
+  const hiddenCount = allMethods.length - methods.length;
 
   return (
     <div className="card" style={{ borderColor: "var(--green)" }}>
@@ -5555,15 +5566,27 @@ function TaxMethodsPanel({ result, filing, onChange }) {
         </div>
       </div>
       <div className="p-5">
-        <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
-          5 種計稅方式 × 2 種股利選擇(合併 8.5% 抵減 / 分開 28%)= 最多 10 種組合,系統試算所有組合並推薦稅最低者。
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+            預設顯示 5 種「股利合併 8.5% 抵減」計稅方式。如需高所得族群的「股利分開 28%」試算,請打勾下方:
+          </div>
+          {hiddenCount > 0 || showSeparateB ? (
+            <label className="text-xs flex items-center gap-2 cursor-pointer" style={{ color: "var(--ink-soft)" }}>
+              <input type="checkbox"
+                checked={showSeparateB}
+                onChange={e => setShowSeparateB(e.target.checked)} />
+              顯示「股利分開 28%」({allMethods.filter(m => m.dividendChoice === "separate").length} 種)
+            </label>
+          ) : null}
         </div>
         <table className="w-full text-sm">
           <thead>
             <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
               <th className="text-center px-2 py-2 text-xs font-medium w-12" style={{ color: "var(--ink-mute)" }}>採用</th>
               <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>計稅方式</th>
-              <th className="text-center px-2 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
+              {showSeparateB && (
+                <th className="text-center px-2 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
+              )}
               <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>淨額分配</th>
               <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>綜所稅額</th>
               <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>抵減後</th>
@@ -5588,12 +5611,14 @@ function TaxMethodsPanel({ result, filing, onChange }) {
                     <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{m.desc}</div>
                     {isBest && <span className="chip chip-green text-[10px] mt-0.5">★ 最低稅</span>}
                   </td>
-                  <td className="px-2 py-2 text-center">
-                    {m.dividendChoice === "combine"
-                      ? <span className="chip chip-amber text-[9px]">合併<br/>8.5%</span>
-                      : <span className="chip text-[9px]" style={{ background: "#e8f0ed", color: "#3d5235" }}>分開<br/>28%</span>
-                    }
-                  </td>
+                  {showSeparateB && (
+                    <td className="px-2 py-2 text-center">
+                      {m.dividendChoice === "combine"
+                        ? <span className="chip chip-amber text-[9px]">合併<br/>8.5%</span>
+                        : <span className="chip text-[9px]" style={{ background: "#e8f0ed", color: "#3d5235" }}>分開<br/>28%</span>
+                      }
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-xs num">
                     {m.sub.map((s, i) => (
                       <div key={i}>
