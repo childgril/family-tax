@@ -994,6 +994,7 @@ function computeTaxForFiling(filing, members, year) {
   const donationGeneral = toNum(itemized.donationGeneral);     // 一般捐贈(限20%)
   const donationUnlimited = toNum(itemized.donationUnlimited); // 不限額捐贈(政府/國防/勞軍等)
   const insurancePersonal = toNum(itemized.insurancePersonal); // 人身保險費(每人上限24,000)
+  const insurancePersonalByMember = itemized.insurancePersonalByMember || {}; // 逐人輸入 (優先)
   const insuranceHealth = toNum(itemized.insuranceHealth);     // 健保費(不限額)
   const medical = toNum(itemized.medical);                     // 醫藥及生育費(不限額)
   const disaster = toNum(itemized.disaster);                   // 災害損失
@@ -1001,13 +1002,25 @@ function computeTaxForFiling(filing, members, year) {
 
   // 捐贈上限: 一般捐贈不得超過「綜合所得總額」 20%
   // 注意:官方申報書「綜合所得總額」是「薪資已扣特扣後」的數字,所以 20% 上限要用扣完薪資特扣的金額
-  // 例: 薪資 717,978 + 其他 178,200 = 895,408 (毛); 申報書綜所總額 = 895,408 - 207,000 = 688,408
-  //     20% 上限 = 688,408 × 0.2 ≈ 137,682
   const grossIncomeForDonation = grossIncome - salaryDeductible;
   const donationGeneralCapped = Math.min(donationGeneral, grossIncomeForDonation * 0.20);
-  // 保險費上限: 每人 24,000 (申報戶成員人數)
-  const insurancePersonalCapped = Math.min(insurancePersonal, filers.length * params.insuranceLimit);
-  // 自用住宅購屋借款利息: 實際利息 - 儲蓄投資扣除後餘額,上限 30 萬
+
+  // 保險費上限: 每人 24,000;若某人實際 < 24,000 則只能扣實際 (不可互相分配)
+  // 規則:每一被保險人 × min(實際, 24,000) 後加總 = 可扣除
+  let insurancePersonalCapped;
+  let insurancePersonalHasPerMember = false;
+  const perMemberKeys = Object.keys(insurancePersonalByMember).filter(k => toNum(insurancePersonalByMember[k]) > 0);
+  if (perMemberKeys.length > 0) {
+    // 使用者已逐人輸入 → 每人各自套 24,000 上限
+    insurancePersonalHasPerMember = true;
+    insurancePersonalCapped = perMemberKeys.reduce((s, k) => {
+      const amt = toNum(insurancePersonalByMember[k]);
+      return s + Math.min(amt, params.insuranceLimit);
+    }, 0);
+  } else {
+    // 舊版相容:整戶總額,以 "申報戶人數 × 24,000" 為上限 (但這會略高估,使用者應改用逐人輸入)
+    insurancePersonalCapped = Math.min(insurancePersonal, filers.length * params.insuranceLimit);
+  }
 
   const itemizedTotal =
     donationGeneralCapped + donationUnlimited +
@@ -4479,10 +4492,53 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               label="不限額捐贈" hint="政府/國防/勞軍/古蹟修復等,不限額"
               value={filing.itemizedDeductions.donationUnlimited}
               onChange={v => updateField("itemizedDeductions.donationUnlimited", v)} />
-            <DeductionInput
-              label="人身保險費" hint={`每人上限 24,000 × ${result.filers.length}人 = ${fmt(params.insuranceLimit * result.filers.length)}`}
-              value={filing.itemizedDeductions.insurancePersonal}
-              onChange={v => updateField("itemizedDeductions.insurancePersonal", v)} />
+            <div>
+              <DeductionInput
+                label="人身保險費"
+                hint={`每人 ≤ 24,000,實際 < 24,000 只能扣實際;申報戶上限 ${fmt(params.insuranceLimit * result.filers.length)}`}
+                value={filing.itemizedDeductions.insurancePersonal}
+                onChange={v => updateField("itemizedDeductions.insurancePersonal", v)} />
+              {/* 逐人輸入 (展開) */}
+              <details className="mt-1">
+                <summary className="text-[10px] cursor-pointer" style={{ color: "var(--green)" }}>
+                  ▸ 逐人輸入 (更精確,每人 &lt; 24k 只扣實際)
+                </summary>
+                <div className="mt-2 p-2 rounded space-y-1.5" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                  {result.filers.map(m => {
+                    const v = filing.itemizedDeductions.insurancePersonalByMember?.[m.id] || "";
+                    const num = toNum(v);
+                    const capped = Math.min(num, params.insuranceLimit);
+                    return (
+                      <div key={m.id} className="flex items-center gap-2">
+                        <span className="text-[10px]" style={{ minWidth: "55px" }}>{m.name}</span>
+                        <input type="number" className="input-text-plain text-[10px] w-20 text-right"
+                          value={v}
+                          placeholder="0"
+                          onChange={e => {
+                            const newMap = { ...(filing.itemizedDeductions.insurancePersonalByMember || {}) };
+                            const val = Number(e.target.value);
+                            if (val > 0) newMap[m.id] = val;
+                            else delete newMap[m.id];
+                            updateField("itemizedDeductions.insurancePersonalByMember", newMap);
+                          }} />
+                        <span className="text-[9px] num" style={{ color: num > params.insuranceLimit ? "var(--gold)" : "var(--ink-mute)" }}>
+                          {num > 0 ? `→ 扣 ${fmt(capped)}${num > params.insuranceLimit ? " (上限)" : ""}` : ""}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <div className="text-[10px] pt-1 border-t" style={{ borderColor: "var(--line)", color: "var(--green)" }}>
+                    ✓ 逐人輸入合計: {fmt(
+                      Object.entries(filing.itemizedDeductions.insurancePersonalByMember || {})
+                        .reduce((s, [, v]) => s + Math.min(toNum(v), params.insuranceLimit), 0)
+                    )}
+                    {Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0 &&
+                      <span className="ml-2">(優先於上方總額)</span>
+                    }
+                  </div>
+                </div>
+              </details>
+            </div>
             <DeductionInput
               label="全民健保費" hint="不限額 (含補充保費)"
               value={filing.itemizedDeductions.insuranceHealth}
