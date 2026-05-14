@@ -401,26 +401,55 @@ const INCOME_CATEGORIES = {
 
 // 常用格式代號 (官方公告對照)
 const INCOME_CODES = {
-  // 薪資 50
+  // 薪資 (50)
   "50":     { name: "薪資 (固定薪資)" },
   "50扣免繳": { name: "薪資 (扣繳免繳)" },
-  // 利息
+
+  // 營利所得 (54)
+  "54":     { name: "營利所得 - 86年以前股利或盈餘" },
+  "54C":    { name: "營利所得 - 87年以後股利憑單" },
+  "54Y":    { name: "營利所得 - 其他 (合夥盈餘等)" },
+  "71D":    { name: "營利所得 - 小規模營業人 (查定課徵)" },
+  "71G":    { name: "營利所得 - 儲蓄性質信託資金收益" },
+  "71M":    { name: "營利所得 - 87年以前緩課股票" },
+
+  // 利息所得 (5)
   "5A":     { name: "金融機構利息 (銀行/合作社/農漁會,可享儲蓄扣除)" },
   "5B":     { name: "非金融機構利息 (保險公司/證券公司,不享儲蓄扣除)" },
-  // 股利/營利
-  "54C":    { name: "股利憑單 (87年以後)" },
-  // 租賃
+  "5C":     { name: "公債/公司債/金融債券利息 (分離課稅 10%)" },
+  "60":     { name: "資產證券化分配利息 (分離課稅 10%)" },
+  "61":     { name: "附條件交易利息 (分離課稅 10%)" },
+
+  // 租賃所得 (51)
   "51":     { name: "房屋租賃 (採 43% 標準費用率)" },
   "51L":    { name: "土地租賃 (僅可扣地價稅)" },
-  "51J":    { name: "其他固定資產租賃 (房屋/土地以外,如機具設備)" },
+  "51J":    { name: "其他固定資產租賃 (機具設備等)" },
   "51I":    { name: "非固定資產租賃 - 其他 (借券所得,通常不扣費用)" },
   "51K":    { name: "非固定資產租賃 - 債券租借" },
-  // 執行業務
-  "9A":     { name: "執行業務 (費用率視業別)" },
-  "9B":     { name: "稿費/演講費 (定額免稅 18 萬)" },
-  // 其他
-  "92":     { name: "其他所得" },
-  "93":     { name: "退職所得" },
+
+  // 權利金 (53)
+  "53":     { name: "權利金 (智慧財產權使用費)" },
+
+  // 執行業務 (9A/9B)
+  "9A":     { name: "執行業務 (律師/會計師/醫師等,費用率視業別)" },
+  "9B":     { name: "稿費/演講費/版稅 (定額免稅 18 萬)" },
+
+  // 其他類
+  "76":     { name: "財產交易所得 (含拍賣、未上市股票)" },
+  "76W":    { name: "境外財產交易所得 (海外)" },
+  "87":     { name: "自力耕作、漁、牧、林、礦所得" },
+  "90":     { name: "告發/檢舉獎金 (分離課稅)" },
+  "91":     { name: "競技、競賽、機會中獎獎金" },
+  "92":     { name: "其他所得 (需註明給付項目)" },
+  "93":     { name: "退職所得 (定額免稅)" },
+  "94":     { name: "員工認股權所得" },
+  "95":     { name: "政府補助款" },
+  "96":     { name: "結構型商品交易所得 (分離課稅)" },
+  "97":     { name: "受贈所得" },
+
+  // 海外/大陸地區 (基本稅額制計算)
+  "71":     { name: "海外/大陸地區營利所得" },
+  "73":     { name: "海外/大陸地區利息所得" },
 };
 
 // 算單一筆所得的「所得總額」(收入 − 必要費用)
@@ -5333,12 +5362,22 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
       <td className="px-2 py-1">
         <input className="input-text-plain text-xs w-full" value={e.code || ""}
           onChange={ev => onUpdate(e.id, { code: ev.target.value })}
-          placeholder={cat?.defaultCode} list={`codes_${e.id}`} />
+          placeholder={`${cat?.defaultCode || "代號"} (可手填)`} list={`codes_${e.id}`} />
         <datalist id={`codes_${e.id}`}>
           {Object.entries(CODES).map(([code, info]) => (
             <option key={code} value={code}>{info.name}</option>
           ))}
         </datalist>
+        {e.code && CODES[e.code] && (
+          <div className="text-[9px] mt-0.5 truncate" style={{ color: "var(--ink-mute)" }} title={CODES[e.code].name}>
+            {CODES[e.code].name.split(" (")[0]}
+          </div>
+        )}
+        {e.code && !CODES[e.code] && (
+          <div className="text-[9px] mt-0.5" style={{ color: "var(--gold)" }}>
+            ⓘ 自定代號
+          </div>
+        )}
         {e.category === "interest" && (
           <div className="text-[9px] mt-0.5">
             {e.code === "5A" && <span style={{ color: "var(--green)" }}>✓ 享儲蓄扣除</span>}
@@ -5658,10 +5697,12 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                 ["interest", "5A", "金融利息"],
                 ["interest", "5B", "非金融利息"],
                 ["dividend", "54C", "股利"],
+                ["dividend", "71D", "71D 小規模查定"],
                 ["rental", "51", "房屋租賃"],
                 ["rental", "51L", "土地租賃"],
                 ["rental", "51I", "借券所得"],
                 ["executive", "9A", "執行業務"],
+                ["executive", "9B", "稿費"],
                 ["other", "92", "其他"],
               ].map(([cat, code, label]) => (
                 <button key={code} className="btn-secondary text-xs"
@@ -5669,6 +5710,12 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                   + {label}
                 </button>
               ))}
+            </div>
+
+            {/* 手動輸入提示 */}
+            <div className="mt-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+              💡 找不到代號?<b>直接在表格的「格式代號」欄輸入</b>(如 71D / 54Y / 76 等)。
+              系統的代號清單已涵蓋常用 30+ 種,自由輸入的代號也會正確算稅(預設不扣費用,需要手填的可在「必要費用」欄輸入)。
             </div>
           </div>
 
