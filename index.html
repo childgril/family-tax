@@ -496,6 +496,11 @@ function computeRentalIncome(properties, params) {
       const expenseRatio = p.expenseRatio !== undefined && p.expenseRatio !== "" ? Number(p.expenseRatio) : params.rentExpenseRatio;
       income = gross * (1 - expenseRatio);
       note = `必要費用 ${(expenseRatio * 100).toFixed(0)}%`;
+    } else if (p.type === "land") {
+      // 土地出租: 不能用 43% 費用率,只能扣地價稅
+      const landTax = toNum(p.landTax || 0);
+      income = Math.max(0, gross - landTax);
+      note = `土地租金 − 地價稅 ${fmt(landTax)}`;
     } else if (p.type === "public") {
       // 公益出租人: 每月免稅 15,000,超出部分必要費用 60%
       const exemptMonthly = Math.min(monthly, params.publicLandlordExempt);
@@ -2624,6 +2629,49 @@ function PropertyModal({ property, members, types, params, onSave, onClose }) {
             <textarea className="input-text-plain w-full" rows={2} value={p.note || ""} onChange={e => setP({...p, note: e.target.value})} />
           </Field>
 
+          {/* 資產類型: 建物 / 土地 */}
+          <div>
+            <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>資產類型</label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className={`p-2 rounded cursor-pointer border ${(p.assetType || "building") === "building" ? "border-2" : ""}`}
+                style={{
+                  borderColor: (p.assetType || "building") === "building" ? "var(--accent)" : "var(--line)",
+                  background: (p.assetType || "building") === "building" ? "#fafaf6" : "white"
+                }}>
+                <input type="radio" name="assetType" value="building"
+                  checked={(p.assetType || "building") === "building"}
+                  onChange={() => setP({ ...p, assetType: "building", type: p.type === "land" ? "general" : (p.type || "general") })}
+                  className="mr-1" />
+                <span className="text-sm">🏠 建物</span>
+                <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+                  房屋、套房、店面 (43% 費用率)
+                </div>
+              </label>
+              <label className={`p-2 rounded cursor-pointer border ${p.assetType === "land" ? "border-2" : ""}`}
+                style={{
+                  borderColor: p.assetType === "land" ? "var(--accent)" : "var(--line)",
+                  background: p.assetType === "land" ? "#fafaf6" : "white"
+                }}>
+                <input type="radio" name="assetType" value="land"
+                  checked={p.assetType === "land"}
+                  onChange={() => setP({ ...p, assetType: "land", type: "land" })}
+                  className="mr-1" />
+                <span className="text-sm">🌳 土地</span>
+                <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+                  純土地 (只能扣地價稅)
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* 土地時顯示地價稅 */}
+          {p.assetType === "land" && (
+            <Field label="當年度地價稅" hint="土地租金的唯一可扣除費用 (請填當年實際繳納金額)">
+              <SumInput value={p.landTax || 0}
+                onChange={v => setP({ ...p, landTax: v })} />
+            </Field>
+          )}
+
           <div className="p-3 rounded text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
             ⓘ 物件僅儲存基本資訊。具體的<b>租期、月租、租客、公益出租註記</b>請到「<b>租賃合約</b>」頁建立合約。
             系統會依合約自動攤分到各年度。
@@ -2635,9 +2683,11 @@ function PropertyModal({ property, members, types, params, onSave, onClose }) {
           <button className="btn-primary" onClick={() => {
             if (!p.address) return alert("請輸入地址");
             if (!p.ownerId) return alert("請選擇屋主");
-            // 名稱沒填就用「序號 地址」
             const finalName = p.name || (p.serial ? `${p.serial} ${p.address}` : p.address);
-            onSave({ type: "general", monthlyRent: 0, months: 12, expenseRatio: 0.43, ...p, name: finalName });
+            // 預設 assetType=building, type=general
+            const finalAssetType = p.assetType || "building";
+            const finalType = finalAssetType === "land" ? "land" : (p.type === "land" ? "general" : (p.type || "general"));
+            onSave({ assetType: finalAssetType, type: finalType, monthlyRent: 0, months: 12, expenseRatio: 0.43, ...p, name: finalName, assetType: finalAssetType, type: finalType });
           }}>儲存</button>
         </div>
       </div>
@@ -3689,6 +3739,7 @@ function FilingPage({ data, setData, year, setPage }) {
               filing={selected}
               members={data.members}
               properties={data.properties}
+              setProperties={(next) => setData({ ...data, properties: next })}
               rentalRecords={data.rentalRecords || []}
               setRentalRecords={(next) => setData({ ...data, rentalRecords: next })}
               contracts={data.contracts || []}
@@ -3704,7 +3755,8 @@ function FilingPage({ data, setData, year, setPage }) {
   );
 }
 
-function FilingDetail({ filing, members, properties, rentalRecords, setRentalRecords, contracts, setContracts, year, onChange, onDelete }) {
+function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, year, onChange, onDelete }) {
+  const [newPropertyModal, setNewPropertyModal] = React.useState(null); // 新增物件 modal
   // 把 properties 過濾出屬於這申報戶的人持有的
   const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
   const householdProperties = properties.filter(p => filerIds.includes(p.ownerId));
@@ -4468,15 +4520,11 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                             </tr>
                           </thead>
                           <tbody>
-                            {agg.contracts.map(c => (
-                              <tr key={c.contractId} style={{
-                                borderBottom: "1px solid var(--line-soft)",
-                                opacity: c.overriddenByPublic ? 0.5 : 1
-                              }}>
+                            {agg.contracts.filter(c => c.months > 0).map(c => (
+                              <tr key={c.contractId} style={{ borderBottom: "1px solid var(--line-soft)" }}>
                                 <td className="px-2 py-1">
                                   {c.tenantName}
-                                  {c.overriddenByPublic && <span className="ml-1 text-[9px]" style={{ color: "var(--ink-mute)" }}>(被公益覆蓋)</span>}
-                                  {c.hasOverlapWithPublic && <span className="ml-1 text-[9px]" style={{ color: "var(--gold)" }}>(部分扣除)</span>}
+                                  {c.hasOverlapWithPublic && <span className="ml-1 text-[9px]" style={{ color: "var(--gold)" }}>(部分被公益覆蓋)</span>}
                                 </td>
                                 <td className="px-2 py-1 num text-[10px]">{c.period}</td>
                                 <td className="px-2 py-1 text-center num">{
@@ -4500,6 +4548,75 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                             </tr>
                           </tbody>
                         </table>
+
+                        {/* 月份覆蓋條 */}
+                        {(() => {
+                          // 用原始合約 (不去重) 算 coverage
+                          const propContracts = (contracts || []).filter(c => c.propertyId === p.id);
+                          const cov = new Array(12).fill("none");
+                          propContracts.forEach(c => {
+                            const s = parseRocDate(c.startDate), e = parseRocDate(c.endDate);
+                            if (!s || !e) return;
+                            const days = monthDaysInYear(s, e, year);
+                            const isPub = c.contractType === "public" || c.isPublicLandlord;
+                            days.forEach((d, i) => {
+                              if (d === 0) return;
+                              const cur = cov[i];
+                              const newType = isPub ? "public" : "general";
+                              if (cur === "none") cov[i] = newType;
+                              else if (cur !== newType && cur !== "overlap") cov[i] = "overlap";
+                            });
+                          });
+                          const missing = cov.map((c, i) => c === "none" ? i + 1 : null).filter(Boolean);
+                          const overlap = cov.map((c, i) => c === "overlap" ? i + 1 : null).filter(Boolean);
+                          return (
+                            <div className="mt-2 p-2 rounded" style={{ background: "white", border: "1px solid var(--line-soft)" }}>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] font-medium" style={{ color: "var(--ink-soft)" }}>1-12 月覆蓋情形</span>
+                                {missing.length === 0 && overlap.length === 0 && (
+                                  <span className="chip chip-green text-[9px]">✓ 完整 12 個月</span>
+                                )}
+                                {overlap.length > 0 && (
+                                  <span className="text-[10px]" style={{ color: "#c83232" }}>⚠ {overlap.length} 月重疊</span>
+                                )}
+                                {missing.length > 0 && (
+                                  <span className="text-[10px]" style={{ color: "var(--gold)" }}>⚠ 缺 {missing.length} 個月</span>
+                                )}
+                              </div>
+                              <div className="flex gap-[2px]">
+                                {cov.map((c, i) => {
+                                  const bg = c === "overlap" ? "#c83232" :
+                                             c === "general" ? "var(--green)" :
+                                             c === "public" ? "var(--gold)" : "white";
+                                  const label = c === "overlap" ? "重疊" : c === "general" ? "一般" : c === "public" ? "公益" : "缺月";
+                                  return (
+                                    <div key={i} title={`${i + 1}月: ${label}`}
+                                      style={{
+                                        flex: 1,
+                                        height: "20px",
+                                        background: bg,
+                                        border: c === "none" ? "1px dashed var(--ink-mute)" : "none",
+                                        borderRadius: "2px",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        fontSize: "9px",
+                                        color: c === "none" ? "var(--ink-mute)" : "white",
+                                      }}>
+                                      {i + 1}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex gap-3 text-[9px] mt-1" style={{ color: "var(--ink-mute)" }}>
+                                <span className="flex items-center gap-0.5"><span style={{ width: "8px", height: "8px", background: "var(--green)", display: "inline-block", borderRadius: "1px" }}></span>一般</span>
+                                <span className="flex items-center gap-0.5"><span style={{ width: "8px", height: "8px", background: "var(--gold)", display: "inline-block", borderRadius: "1px" }}></span>公益</span>
+                                {overlap.length > 0 && <span className="flex items-center gap-0.5"><span style={{ width: "8px", height: "8px", background: "#c83232", display: "inline-block", borderRadius: "1px" }}></span>重疊</span>}
+                                {missing.length > 0 && <span className="ml-auto">缺月: {missing.join(",")} 月</span>}
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         {/* 手動覆寫區 */}
                         {/* 單欄手動覆寫: 輸入全年總租金,系統自動扣公益 */}
@@ -4598,11 +4715,45 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
             })()}
           </div>
 
+          {/* 新增物件按鈕 (本戶申報人) */}
+          {filing.taxpayerId && setProperties && (
+            <div className="px-5 py-3 flex items-center gap-2" style={{ borderTop: "1px solid var(--line-soft)" }}>
+              <span className="text-xs" style={{ color: "var(--ink-soft)" }}>有其他租處 (土地、建物等沒在上面列出的)?</span>
+              <button className="btn-secondary text-xs ml-auto"
+                onClick={() => {
+                  // 預設屋主為當前申報人
+                  setNewPropertyModal({
+                    id: "", serial: "", name: "", address: "",
+                    ownerId: filing.taxpayerId,
+                    assetType: "building", type: "general",
+                    monthlyRent: 0, months: 12, expenseRatio: 0.43,
+                    note: "", taxFreeReason: "", landTax: 0,
+                  });
+                }}>
+                + 新增物件 (土地 / 建物)
+              </button>
+            </div>
+          )}
+
           <div className="px-5 py-3 text-xs" style={{ color: "var(--ink-mute)", borderTop: "1px solid var(--line-soft)" }}>
             ⓘ 系統優先用「合約管理」頁的合約資料,依日期自動攤分到該年度。
             <b>同一物件可同時有公益出租 + 一般出租合約,各自獨立計算稅務</b> (公益部分套用每月免稅 15,000 優惠)。
           </div>
         </div>
+      )}
+
+      {/* 新增物件 Modal */}
+      {newPropertyModal && (
+        <PropertyModal
+          property={newPropertyModal}
+          members={members}
+          onSave={(p) => {
+            const newProp = { ...p, id: uid() };
+            setProperties([...properties, newProp]);
+            setNewPropertyModal(null);
+          }}
+          onClose={() => setNewPropertyModal(null)}
+        />
       )}
     </div>
   );
