@@ -412,6 +412,9 @@ const INCOME_CODES = {
   // 租賃
   "51":     { name: "房屋租賃 (採 43% 標準費用率)" },
   "51L":    { name: "土地租賃 (僅可扣地價稅)" },
+  "51J":    { name: "其他固定資產租賃 (房屋/土地以外,如機具設備)" },
+  "51I":    { name: "非固定資產租賃 - 其他 (借券所得,通常不扣費用)" },
+  "51K":    { name: "非固定資產租賃 - 債券租借" },
   // 執行業務
   "9A":     { name: "執行業務 (費用率視業別)" },
   "9B":     { name: "稿費/演講費 (定額免稅 18 萬)" },
@@ -423,14 +426,23 @@ const INCOME_CODES = {
 // 算單一筆所得的「所得總額」(收入 − 必要費用)
 function computeEntryNet(entry) {
   const gross = toNum(entry.gross);
-  // 51L 土地租賃: 收入 − 地價稅 (使用者填在 expense)
-  // 51 房屋租賃: 收入 × (1 − 43%) 或自填費用
+  // 租賃所得算法依代號:
+  //   51   房屋租賃: 收入 × (1 − 43%) 或自填費用 (預設 43% 費用率)
+  //   51L  土地租賃: 收入 − 地價稅 (使用者填在 expense)
+  //   51J  其他固定資產 (機具設備等): 收入 − 自填費用,預設無費用
+  //   51I  非固定資產-其他 (借券): 收入 − 自填手續費,預設無費用
+  //   51K  非固定資產-債券租借: 收入 − 自填手續費,預設無費用
   // 50 薪資: 整年薪資作為「所得」(扣除額在另一處算)
   // 54C 股利: 不扣費用,直接 = 收入
   // 5A/5B 利息: 不扣費用
   if (entry.category === "rental") {
     if (entry.code === "51L") {
       return Math.max(0, gross - toNum(entry.expense));
+    }
+    if (entry.code === "51I" || entry.code === "51J" || entry.code === "51K") {
+      // 借券/其他非固定資產: 不適用 43% 費用率, 預設無費用
+      const userExpense = toNum(entry.expense);
+      return Math.max(0, gross - userExpense);
     }
     // 51 房屋: 自動 43%,使用者也可手填覆寫
     const userExpense = toNum(entry.expense);
@@ -5331,15 +5343,24 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                             <SumInput value={e.gross} onChange={v => onUpdate(e.id, { gross: v })} />
                           </td>
                           <td className="px-2 py-1">
-                            {(e.code === "51L" || (e.category === "rental" && e.code === "51L") || (e.category === "executive") || (e.category === "rental" && e.code !== "51L" && toNum(e.expense) > 0))
-                              ? <SumInput value={e.expense} onChange={v => onUpdate(e.id, { expense: v })} />
-                              : (
+                            {(() => {
+                              // 哪些代號允許/需要使用者輸入費用?
+                              const needsExpenseInput = (
+                                (e.category === "rental" && (e.code === "51L" || e.code === "51I" || e.code === "51J" || e.code === "51K")) ||
+                                (e.category === "executive") ||
+                                (e.category === "rental" && e.code === "51" && toNum(e.expense) > 0)
+                              );
+                              if (needsExpenseInput) {
+                                return <SumInput value={e.expense} onChange={v => onUpdate(e.id, { expense: v })} />;
+                              }
+                              return (
                                 <div className="text-right text-[10px] num" style={{ color: "var(--ink-mute)" }}>
                                   {e.category === "rental" && e.code === "51" && toNum(e.gross) > 0
                                     ? `自動 43% (${fmt(Math.round(toNum(e.gross) * 0.43))})`
                                     : "—"}
                                 </div>
-                              )}
+                              );
+                            })()}
                           </td>
                           <td className="px-2 py-1 text-right num font-medium" style={{ background: "#fdfcf7" }}>
                             {fmt(net)}
@@ -5390,6 +5411,7 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
               ["dividend", "54C", "股利"],
               ["rental", "51", "房屋租賃"],
               ["rental", "51L", "土地租賃"],
+              ["rental", "51I", "借券所得"],
               ["executive", "9A", "執行業務"],
               ["other", "92", "其他"],
             ].map(([cat, code, label]) => (
@@ -5405,7 +5427,16 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
             <div className="font-medium mb-1">ⓘ 使用說明</div>
             <ul className="list-disc list-inside space-y-0.5">
               <li>從「綜合所得稅結算申報書」的所得明細表格,**逐筆**抄入(每筆一筆所得就是一行)</li>
-              <li><b>所得總額</b>系統自動算:房屋租賃 (51) 自動 43% 費用率;土地租賃 (51L) 用你填的地價稅;執行業務 (9A) 自動 20% 費用率;其他類別 = 收入</li>
+              <li><b>所得總額</b>系統自動算:
+                <ul className="list-[circle] list-inside ml-3 mt-0.5">
+                  <li>房屋租賃 (51) → 自動 43% 費用率</li>
+                  <li>土地租賃 (51L) → 收入 − 你填的地價稅</li>
+                  <li>借券所得 (51I/51J/51K) → 收入 − 自填手續費(不適用 43%)</li>
+                  <li>執行業務 (9A) → 自動 20% 費用率</li>
+                  <li>稿費 (9B) → 上限 18 萬免稅</li>
+                  <li>其他類別 → 收入 = 所得</li>
+                </ul>
+              </li>
               <li><b>歸戶</b>欄位:每筆所得歸到「本人 / 配偶 / 受扶養親屬」其中一人,系統會把同類別加總到上方 ① 各成員所得</li>
               <li><b>扣繳稅額</b>會自動加到 ③ 已預扣繳稅額,無需重複填</li>
               <li>租賃所得若已在「出租物件」頁建合約,此處的「租賃」筆會「<b>另外加入</b>」,可重複請小心 — 適合用於沒建合約的零星租賃</li>
