@@ -5630,28 +5630,64 @@ function OfficialFormView({ result, year, filing }) {
 
   return (
     <div className="card mb-4" style={{ background: "white" }}>
-      <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
-        <div>
-          <div className="ornament" style={{ color: "var(--accent-deep)" }}>OFFICIAL FORM VIEW</div>
-          <div className="font-serif text-base">📋 {year} 年度結算申報書(試算)</div>
-          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
-            參照財政部「綜合所得稅結算申報試算通知書」格式
-          </div>
+      <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)" }}>
+        <div className="ornament" style={{ color: "var(--accent-deep)" }}>OFFICIAL FORM VIEW</div>
+        <div className="font-serif text-base">📋 {year} 年度結算申報書(試算)</div>
+        <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+          參照財政部「綜合所得稅結算申報試算通知書」格式
         </div>
-        <div className="text-right">
-          <div className="ornament" style={{ color: finalDue > 0 ? "var(--ink)" : finalDue < 0 ? "var(--green)" : "var(--ink-mute)" }}>
-            {finalDue > 0 ? `YEAR ${year} TAX TO PAY` : finalDue < 0 ? `YEAR ${year} TAX REFUND` : "BALANCED"}
+      </div>
+
+      {/* 大塊綠色補繳/退稅顯示 + 採用列舉省了多少 */}
+      <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
+        {/* 左 2/3: 退稅/補繳大字 */}
+        <div className="md:col-span-2 text-center p-6 rounded" style={{
+          background: finalDue > 0 ? "var(--ink)" : finalDue < 0 ? "var(--green)" : "#8a8578",
+          color: "white",
+        }}>
+          <div className="ornament" style={{ color: "#a8a293" }}>
+            YEAR {year} {finalDue > 0 ? "TAX TO PAY" : finalDue < 0 ? "TAX REFUND" : "BALANCED"}
           </div>
-          <div className="font-serif num" style={{
-            fontSize: "32px",
-            fontWeight: 500,
-            color: finalDue > 0 ? "var(--ink)" : finalDue < 0 ? "var(--green)" : "var(--ink-mute)",
-            lineHeight: 1.1,
-          }}>
+          <div className="font-serif num mt-2" style={{ fontSize: "48px", fontWeight: 500, lineHeight: 1 }}>
             {fmt(Math.abs(finalDue))}
           </div>
-          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
-            {finalDue > 0 ? "應補繳稅額" : finalDue < 0 ? "可退稅金額" : "無補繳無退稅"} (新臺幣 元)
+          <div className="text-xs mt-2" style={{ color: "#a8a293" }}>
+            {finalDue > 0 ? "應補繳稅額" : finalDue < 0 ? "可退稅金額" : "剛好平衡 · 無補繳無退稅"} (新臺幣 元)
+          </div>
+        </div>
+
+        {/* 右 1/3: 採用列舉省了多少 + 邊際稅率 */}
+        <div className="space-y-2">
+          {(result.saving || 0) > 0 ? (
+            <div className="p-3 rounded" style={{ background: "var(--green-soft)", border: "1px solid var(--green)" }}>
+              <div className="text-[11px] font-medium" style={{ color: "#3d5235" }}>
+                ✓ 採用「{result.useItemized ? "列舉" : "標準"}扣除額」比另一選項省了
+              </div>
+              <div className="num font-serif" style={{ color: "#3d5235", fontSize: "24px", fontWeight: 500, lineHeight: 1.2 }}>
+                {fmt(result.saving)}
+              </div>
+              <div className="text-[10px] mt-0.5" style={{ color: "#3d5235" }}>元 (相較於{result.useItemized ? "標準" : "列舉"}扣除)</div>
+            </div>
+          ) : (
+            <div className="p-3 rounded" style={{ background: "white", border: "1px dashed var(--line)" }}>
+              <div className="text-[11px]" style={{ color: "var(--ink-mute)" }}>
+                兩種扣除額試算下,差異不大或標準扣除較有利
+              </div>
+            </div>
+          )}
+          <div className="p-3 rounded" style={{ background: "white", border: "1px solid var(--line)" }}>
+            <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>邊際稅率</div>
+            <div className="num font-serif" style={{ fontSize: "20px", fontWeight: 500 }}>
+              {(rate * 100).toFixed(0)}%
+            </div>
+            {grossIncome > 0 && (
+              <>
+                <div className="text-[10px] mt-1" style={{ color: "var(--ink-mute)" }}>實際稅率</div>
+                <div className="num font-serif text-sm" style={{ color: "var(--ink-soft)" }}>
+                  {(Math.max(0, taxBeforeCredits) / grossIncome * 100).toFixed(2)}%
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
