@@ -405,8 +405,8 @@ const INCOME_CODES = {
   "50":     { name: "薪資 (固定薪資)" },
   "50扣免繳": { name: "薪資 (扣繳免繳)" },
   // 利息
-  "5A":     { name: "金融機構利息" },
-  "5B":     { name: "非金融機構利息" },
+  "5A":     { name: "金融機構利息 (銀行/合作社/農漁會,可享儲蓄扣除)" },
+  "5B":     { name: "非金融機構利息 (保險公司/證券公司,不享儲蓄扣除)" },
   // 股利/營利
   "54C":    { name: "股利憑單 (87年以後)" },
   // 租賃
@@ -860,6 +860,8 @@ function computeTaxForFiling(filing, members, year) {
   //       若該成員在 entries 內某類別沒有資料,沿用 memberIncome 的值
   let entriesPrepaidTax = 0;       // 從 entries 累計的扣繳稅額 (要併入 prepaidTax)
   const incomeFromEntries = {};     // { memberId: { salary, interest, dividend, rental, other } }
+  let interest5A = 0;               // 5A 金融機構利息 (適用儲蓄投資扣除額)
+  let has5BEntries = false;         // 是否有 5B 利息 (用於 UI 提示)
   (filing.incomeEntries || []).forEach(e => {
     if (!e.ownerId) return;
     const cat = INCOME_CATEGORIES[e.category];
@@ -867,12 +869,14 @@ function computeTaxForFiling(filing, members, year) {
     const net = computeEntryNet(e);
     if (!incomeFromEntries[e.ownerId]) incomeFromEntries[e.ownerId] = {};
     const bucket = incomeFromEntries[e.ownerId];
-    // 把 net 加到對應的 field (salary/interest/dividend/rental/other)
-    // 注意: 租賃 (rental) 系統已從合約算,entries 的租賃部分當「補充」加到 rental 結果
-    //       為了避免雙重計算,租賃類的 entries 加到 'other' bucket (使用者自負,或請從合約頁管理)
     const targetField = cat.field === "rental" ? "_rental_entries" : cat.field;
     bucket[targetField] = (bucket[targetField] || 0) + net;
     entriesPrepaidTax += toNum(e.withholding);
+    // 記 5A 利息 (僅 5A 適用儲蓄投資扣除額,5B 不適用)
+    if (e.category === "interest") {
+      if (e.code === "5A") interest5A += net;
+      else if (e.code === "5B") has5BEntries = true;
+    }
   });
 
   let salaryGross = 0, salaryDeductible = 0;
@@ -960,9 +964,15 @@ function computeTaxForFiling(filing, members, year) {
   const generalDeduction = useItemized ? itemizedTotal : standardDeduction;
 
   // === 4. 特別扣除額 ===
-  // 儲蓄投資扣除額: 預設 = min(全戶利息, 270,000)
-  // 但若使用者勾選「手動覆寫」(例如部分利息為公債/公司債不適用),則用使用者填的金額
-  const savingsAuto = Math.min(interest, params.savingsDeduction);
+  // 儲蓄投資扣除額:依稅法規定,**只有「5A 金融機構存款利息」適用**
+  // 5B (證券公司、保險公司等非金融機構利息) 不適用扣除
+  // 邏輯:
+  //   - 若使用者用「逐筆所得明細」表 → savingsAuto = min(Σ 5A 利息, 270k)
+  //   - 若使用者只用 ① 區單格輸入 (沒分代號) → 退回舊邏輯,假設全部利息都是 5A
+  //   - 使用者可手動覆寫
+  const hasInterestEntries = (filing.incomeEntries || []).some(e => e.category === "interest");
+  const savingsBase = hasInterestEntries ? interest5A : interest;  // 沒填 entries 時退回全部利息
+  const savingsAuto = Math.min(savingsBase, params.savingsDeduction);
   const savings = filing.savingsOverride
     ? Math.min(Math.max(0, toNum(filing.savingsOverrideAmount)), params.savingsDeduction)
     : savingsAuto;
@@ -1136,6 +1146,10 @@ function computeTaxForFiling(filing, members, year) {
     // 特扣
     salarySD, savings, savingsAuto, disabilityDed, educationDed, preschoolDed, longTermCareDed, rentDeductActual,
     specialTotal,
+    // 利息明細 (5A 適用儲蓄扣除,5B 不適用)
+    interest5A,
+    has5BEntries,
+    hasInterestEntries,
     // 基本生活費
     blTotal, blcompare, blDiff,
     // 稅 — 採用 chosenMethod 的結果作為最終值
@@ -4210,11 +4224,29 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                 <div className="text-xs font-medium mb-1" style={{ color: "var(--ink-soft)" }}>
                   ⓘ 儲蓄投資特別扣除額 (從利息自動計算)
                 </div>
-                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                  系統自動套用 = min(全戶利息, {fmt(params.savingsDeduction)})。
-                  <br />
-                  ⚠ 若你的利息包含郵局存簿、公債、公司債、金融債券、短期票券等<b>不適用</b>項目,請勾選下方覆寫。
-                </div>
+                {result.hasInterestEntries ? (
+                  // 有逐筆明細時:顯示 5A vs 全部利息的拆分
+                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                    <div className="num">
+                      ✓ 5A 金融機構利息: <span style={{ color: "var(--green)" }}>{fmt(result.interest5A)}</span> → 可享儲蓄扣除
+                    </div>
+                    {result.has5BEntries && (
+                      <div className="num mt-0.5">
+                        ✗ 5B 非金融機構利息: <span style={{ color: "var(--gold)" }}>{fmt((result.interest || 0) - (result.interest5A || 0))}</span> → 不可扣 (保險/證券公司等)
+                      </div>
+                    )}
+                    <div className="mt-1">
+                      系統採用 5A 部分 = min({fmt(result.interest5A)}, {fmt(params.savingsDeduction)}) = <b>{fmt(result.savingsAuto)}</b>
+                    </div>
+                  </div>
+                ) : (
+                  // 沒明細時:沿用舊邏輯提示
+                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                    系統自動套用 = min(全戶利息, {fmt(params.savingsDeduction)})。
+                    <br />
+                    ⚠ 若你的利息包含郵局存簿、公債、公司債、保險公司利息(5B)等<b>不適用</b>項目,請勾選下方覆寫,或改用「📑 所得明細逐筆輸入」並區分 5A / 5B。
+                  </div>
+                )}
                 {filing.savingsOverride ? (
                   <div className="flex items-center gap-2 mt-2">
                     <span className="text-xs">手動指定金額:</span>
@@ -5267,6 +5299,12 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                                 <option key={code} value={code}>{info.name}</option>
                               ))}
                             </datalist>
+                            {e.category === "interest" && (
+                              <div className="text-[9px] mt-0.5">
+                                {e.code === "5A" && <span style={{ color: "var(--green)" }}>✓ 享儲蓄扣除</span>}
+                                {e.code === "5B" && <span style={{ color: "var(--gold)" }}>✗ 不享儲蓄扣除</span>}
+                              </div>
+                            )}
                           </td>
                           <td className="px-2 py-1">
                             <input className="input-text-plain text-xs w-full" value={e.source || ""}
