@@ -5792,9 +5792,18 @@ function ResultPanel({ result, year, members, filing }) {
 function FCell({ label, value, bold }) {
   // 字串原樣顯示 (例如稅率 "12%"); 數字才走 fmt 千分位
   const display = typeof value === "string" ? value : fmt(value);
+  // 把 \n 切開,用 <br/> 顯示真的換行 (CSS pre-line 在某些情境下不可靠)
+  const lines = typeof label === "string" ? label.split("\n") : [label];
   return (
     <div className="text-center px-2" style={{ minWidth: "85px" }}>
-      <div className="text-[10px] underline" style={{ color: "var(--ink-soft)", lineHeight: "1.2", whiteSpace: "pre-line" }}>{label}</div>
+      <div className="text-[10px] underline" style={{ color: "var(--ink-soft)", lineHeight: "1.2" }}>
+        {lines.map((line, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <br />}
+            {line}
+          </React.Fragment>
+        ))}
+      </div>
       <div className={`num mt-1 ${bold ? "font-semibold" : ""}`} style={{ fontSize: "13px" }}>{display}</div>
     </div>
   );
