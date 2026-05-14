@@ -1161,6 +1161,7 @@ function computeTaxForFiling(filing, members, year) {
     warnings,
     // 所得
     salaryGross, interest, dividend, rentalTaxable, otherIncome, grossIncome,
+    grossIncomeForDonation,  // 申報書版綜所總額 (扣完薪資特扣後),用於捐贈 20% 上限
     rentalDetail,
     // 扣除
     exemption,
@@ -3885,7 +3886,21 @@ function FilingPage({ data, setData, year, setPage }) {
                   className={`w-full text-left px-3 py-3 border-b ${selectedId === f.id ? "" : "hover:bg-gray-50"}`}
                   style={{ borderColor: "var(--line-soft)", background: selectedId === f.id ? "#fafaf6" : "white",
                     borderLeft: selectedId === f.id ? "3px solid var(--accent)" : "3px solid transparent" }}>
-                  <div className="text-sm font-medium truncate">{f.name}</div>
+                  {(() => {
+                    const taxpayer = data.members.find(m => m.id === f.taxpayerId);
+                    const spouse = data.members.find(m => m.id === f.spouseId);
+                    const displayName = taxpayer
+                      ? (spouse ? `${taxpayer.name} & ${spouse.name}` : taxpayer.name)
+                      : (f.name || "(未指定納稅人)");
+                    return (
+                      <>
+                        <div className="text-sm font-medium truncate">{displayName}</div>
+                        {f.name && f.name !== displayName && (
+                          <div className="text-[10px] truncate" style={{ color: "var(--ink-mute)" }}>{f.name}</div>
+                        )}
+                      </>
+                    );
+                  })()}
                   {r && (() => {
                     const fd = r.finalDue || 0;
                     const label = fd > 0 ? "應補繳" : fd < 0 ? "可退稅" : "平衡";
@@ -4051,9 +4066,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
   // === 逐筆所得明細 (依官方申報書格式) ===
   const incomeEntries = filing.incomeEntries || [];
   const addEntry = (preset = {}) => {
+    // 預設歸戶: 用最後一筆的 ownerId (使用者通常連續輸入同一人的所得);
+    // 若還沒有任何 entry → 用納稅義務人
+    const lastEntry = incomeEntries[incomeEntries.length - 1];
+    const defaultOwnerId = lastEntry?.ownerId || filing.taxpayerId || "";
     const entry = {
       id: uid(),
-      ownerId: filing.taxpayerId || "",
+      ownerId: defaultOwnerId,
       category: "salary",
       code: "50",
       source: "",
@@ -4229,7 +4248,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   ? <div className="text-[10px]" style={{ color: "var(--green)" }}>📑 +{fmt(val)}</div>
                   : null;
                 return (
-                  <tr key={m.id} className="table-row">
+                  <tr key={m.id} className="table-row align-top">
                     <td className="py-2 font-medium">
                       {m.name}
                       <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
@@ -4237,25 +4256,28 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       </div>
                     </td>
                     <td className="py-2 text-right">
-                      <div className="w-28 inline-block">
-                        <SumInput value={income.salary}
-                          onChange={v => updateIncome(m.id, "salary", v)} />
-                        {showEntryHint(fromEntriesSalary)}
-                      </div>
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesSalary}
+                        manualValue={toNum(income.salary)}
+                        onChangeManual={v => updateIncome(m.id, "salary", v)}
+                        width="w-28"
+                      />
                     </td>
                     <td className="py-2 text-right">
-                      <div className="w-24 inline-block">
-                        <SumInput value={income.interest}
-                          onChange={v => updateIncome(m.id, "interest", v)} />
-                        {showEntryHint(fromEntriesInterest)}
-                      </div>
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesInterest}
+                        manualValue={toNum(income.interest)}
+                        onChangeManual={v => updateIncome(m.id, "interest", v)}
+                        width="w-24"
+                      />
                     </td>
                     <td className="py-2 text-right">
-                      <div className="w-24 inline-block">
-                        <SumInput value={income.dividend}
-                          onChange={v => updateIncome(m.id, "dividend", v)} />
-                        {showEntryHint(fromEntriesDividend)}
-                      </div>
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesDividend}
+                        manualValue={toNum(income.dividend)}
+                        onChangeManual={v => updateIncome(m.id, "dividend", v)}
+                        width="w-24"
+                      />
                     </td>
                     <td className="py-2 text-right num text-xs" title={myComputable.map(p => p.name).join(", ")}>
                       {fmt(myRental.taxable)}
@@ -4264,11 +4286,12 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       </div>}
                     </td>
                     <td className="py-2 text-right">
-                      <div className="w-24 inline-block">
-                        <SumInput value={income.other}
-                          onChange={v => updateIncome(m.id, "other", v)} />
-                        {showEntryHint(fromEntriesOther)}
-                      </div>
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesOther}
+                        manualValue={toNum(income.other)}
+                        onChangeManual={v => updateIncome(m.id, "other", v)}
+                        width="w-24"
+                      />
                     </td>
                   </tr>
                 );
@@ -4349,7 +4372,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         <div className="p-5">
           <div className="grid grid-cols-2 gap-4 mb-4">
             <DeductionInput
-              label="一般捐贈" hint={`上限 = 綜合所得 20% = ${fmt(result.grossIncome * 0.2)}`}
+              label="一般捐贈" hint={`上限 = 綜合所得 (扣薪資特扣後) 20% = ${fmt((result.grossIncomeForDonation || result.grossIncome) * 0.2)}`}
               value={filing.itemizedDeductions.donationGeneral}
               onChange={v => updateField("itemizedDeductions.donationGeneral", v)} />
             <DeductionInput
@@ -5043,7 +5066,7 @@ function DonationSimulator({ filing, result, params, onApplyDonation }) {
   // 計算: 現在的列舉合計 vs 加 X 後的列舉合計
   // 注意: 一般捐贈上限 = 綜所 20%,超過部分不能扣;不限額捐贈無上限
   const currentDonation = toNum(filing.itemizedDeductions.donationGeneral);
-  const donationCap = result.grossIncome * 0.2;
+  const donationCap = (result.grossIncomeForDonation || result.grossIncome) * 0.2;
   const currentDonationEffective = Math.min(currentDonation, donationCap);
   const newDonation = currentDonation + addAmount;
   const newDonationEffective = Math.min(newDonation, donationCap);
@@ -5256,6 +5279,56 @@ function TaxMethodsPanel({ result, filing, onChange }) {
 // ============================================================
 // 逐筆所得明細表格 (依官方結算申報書格式)
 // ============================================================
+// ① 各成員所得的格子:預設顯示「entries + 手動」合計;點下去才展開編輯
+function CombinedIncomeCell({ entriesValue, manualValue, onChangeManual, width }) {
+  const [editing, setEditing] = React.useState(false);
+  const total = (entriesValue || 0) + (manualValue || 0);
+  const widthCls = width || "w-24";
+
+  if (!editing) {
+    // 收合狀態:顯示合計大字 + 點擊提示
+    return (
+      <div className={`${widthCls} inline-block text-right`}>
+        <button
+          className="w-full text-right num font-medium hover:bg-gray-50 rounded px-2 py-1"
+          onClick={() => setEditing(true)}
+          title="點擊以手動補加或編輯"
+          style={{
+            borderBottom: "1px dashed transparent",
+          }}
+          onMouseEnter={e => e.currentTarget.style.borderBottomColor = "var(--accent)"}
+          onMouseLeave={e => e.currentTarget.style.borderBottomColor = "transparent"}
+        >
+          {fmt(total)}
+        </button>
+        {entriesValue > 0 && (
+          <div className="text-[10px]" style={{ color: "var(--green)" }}>
+            📑 {fmt(entriesValue)}{manualValue > 0 ? ` + 手動 ${fmt(manualValue)}` : ""}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // 展開狀態:可編輯手動部分
+  return (
+    <div className={`${widthCls} inline-block`}>
+      <div className="text-[10px] mb-0.5 text-left" style={{ color: "var(--green)" }}>
+        📑 entries {fmt(entriesValue)} (不可改)
+      </div>
+      <SumInput value={manualValue} onChange={onChangeManual} />
+      <div className="flex items-center justify-between mt-0.5">
+        <span className="text-[10px] num" style={{ color: "var(--ink-mute)" }}>
+          手動 + 合計 {fmt(total)}
+        </span>
+        <button className="text-[10px] hover:underline" onClick={() => setEditing(false)} style={{ color: "var(--ink-mute)" }}>
+          ✕ 收合
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // 渲染單一筆所得列 (用在 IncomeEntriesTable 內,可重複使用以支援按成員分組)
 function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
   const cat = CATEGORIES[e.category];
@@ -5289,7 +5362,7 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
       <td className="px-2 py-1">
         <input className="input-text-plain text-xs w-full" value={e.source || ""}
           onChange={ev => onUpdate(e.id, { source: ev.target.value })}
-          placeholder="例:鴻海精密工業股份有限公司" />
+          placeholder="例:鴻海精密" />
       </td>
       <td className="px-2 py-1">
         <input className="input-text-plain text-xs w-full num" value={e.taxId || ""}
@@ -5343,6 +5416,15 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
   const [filter, setFilter] = React.useState("all");
   const [memberFilter, setMemberFilter] = React.useState("all");
   const [groupByMember, setGroupByMember] = React.useState(true);
+  // 新增時的預設歸戶:預設沿用最後一筆;使用者可在「新增區」上方手動鎖定到特定成員
+  const [stickyOwnerId, setStickyOwnerId] = React.useState("__last__");
+  const resolvedOwnerId = stickyOwnerId === "__last__"
+    ? (entries[entries.length - 1]?.ownerId || (members?.[0]?.id) || "")
+    : stickyOwnerId;
+
+  const addWithOwner = (preset = {}) => {
+    onAdd({ ownerId: resolvedOwnerId, ...preset });
+  };
 
   // 依類別分類
   const grouped = entries.reduce((acc, e) => {
@@ -5485,8 +5567,8 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                   <thead>
                     <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--ink)" }}>
                       <th className="px-2 py-2 text-left font-medium" style={{ minWidth: "100px" }}>所得類別</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "70px" }}>格式代號</th>
-                      <th className="px-2 py-2 text-left font-medium">所得發生處所</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "110px" }}>格式代號</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "180px" }}>所得發生處</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>統一編號</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>歸戶</th>
                       <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>給付/收入</th>
@@ -5554,27 +5636,53 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
           )}
 
           {/* 新增按鈕區 */}
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button className="btn-primary text-xs" onClick={() => onAdd()}>
-              + 新增一筆所得
-            </button>
-            <span style={{ color: "var(--ink-mute)" }} className="text-xs self-center mx-1">快速新增:</span>
-            {[
-              ["salary", "50", "薪資"],
-              ["interest", "5A", "金融利息"],
-              ["interest", "5B", "非金融利息"],
-              ["dividend", "54C", "股利"],
-              ["rental", "51", "房屋租賃"],
-              ["rental", "51L", "土地租賃"],
-              ["rental", "51I", "借券所得"],
-              ["executive", "9A", "執行業務"],
-              ["other", "92", "其他"],
-            ].map(([cat, code, label]) => (
-              <button key={code} className="btn-secondary text-xs"
-                onClick={() => onAdd({ category: cat, code })}>
-                + {label}
+          <div className="mt-4 p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <div className="flex items-center gap-2 mb-2 text-xs flex-wrap">
+              <span style={{ color: "var(--ink-soft)" }}>新增時歸戶到:</span>
+              <button
+                className={`btn-secondary text-xs ${stickyOwnerId === "__last__" ? "border-2" : ""}`}
+                style={stickyOwnerId === "__last__" ? { borderColor: "var(--accent)" } : {}}
+                onClick={() => setStickyOwnerId("__last__")}>
+                ↺ 跟最後一筆同
+                {entries.length > 0 && (() => {
+                  const lastOwner = members?.find(m => m.id === entries[entries.length - 1]?.ownerId);
+                  return lastOwner ? <span className="ml-1" style={{ color: "var(--ink-mute)" }}>({lastOwner.name})</span> : null;
+                })()}
               </button>
-            ))}
+              {(members || []).map(m => (
+                <button key={m.id}
+                  className={`btn-secondary text-xs ${stickyOwnerId === m.id ? "border-2" : ""}`}
+                  style={stickyOwnerId === m.id ? { borderColor: "var(--green)", background: "var(--green-soft)" } : {}}
+                  onClick={() => setStickyOwnerId(m.id)}>
+                  👤 {m.name}
+                </button>
+              ))}
+              <span className="ml-auto text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                ⓘ 連續輸入同一人多筆所得時,先點該人名,接下來新增的都會自動歸到他
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-primary text-xs" onClick={() => addWithOwner()}>
+                + 新增一筆所得
+              </button>
+              <span style={{ color: "var(--ink-mute)" }} className="text-xs self-center mx-1">快速新增:</span>
+              {[
+                ["salary", "50", "薪資"],
+                ["interest", "5A", "金融利息"],
+                ["interest", "5B", "非金融利息"],
+                ["dividend", "54C", "股利"],
+                ["rental", "51", "房屋租賃"],
+                ["rental", "51L", "土地租賃"],
+                ["rental", "51I", "借券所得"],
+                ["executive", "9A", "執行業務"],
+                ["other", "92", "其他"],
+              ].map(([cat, code, label]) => (
+                <button key={code} className="btn-secondary text-xs"
+                  onClick={() => addWithOwner({ category: cat, code })}>
+                  + {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* 提示 */}
