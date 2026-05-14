@@ -305,6 +305,26 @@ const toNum = (v) => {
 };
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+// 算式求值: 支援 + - * / 與括號,空白與千分位逗號被忽略
+// 例: "114360+171540" → 285900, "(1+2)*3" → 9
+function evalExpr(expr) {
+  if (expr == null || expr === "") return 0;
+  const raw = String(expr).replace(/[,\s]/g, "").trim();
+  if (!raw) return 0;
+  // 純數字 (含負號) 直接回傳
+  if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
+  // 只允許數字、+ - * / . ( )
+  if (!/^[0-9+\-*/.()]+$/.test(raw)) return NaN;
+  try {
+    // eslint-disable-next-line no-new-func
+    const r = Function(`"use strict"; return (${raw});`)();
+    if (typeof r === "number" && Number.isFinite(r)) return r;
+    return NaN;
+  } catch {
+    return NaN;
+  }
+}
+
 // ============================================================
 // ROC 民國日期工具
 // ============================================================
@@ -1745,6 +1765,63 @@ function Field({ label, hint, children }) {
       <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>{label}</label>
       {children}
       {hint && <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>{hint}</div>}
+    </div>
+  );
+}
+
+// 支援算式輸入的數字框
+// 編輯時 (focus): 顯示原始算式 (例 "114360+171540");
+// 失焦後 (blur): 顯示計算結果 (例 285,900)
+// onChange 一律送出計算後的數字
+function SumInput({ value, onChange, className = "", placeholder = "0", title = "可輸入算式,例如 100+200+300" }) {
+  const [expr, setExpr] = React.useState("");
+  const [editing, setEditing] = React.useState(false);
+
+  // 顯示值: 編輯中 = 原始算式;非編輯 = 千分位格式
+  const display = editing
+    ? expr
+    : (value ? Number(value).toLocaleString("zh-TW") : "");
+
+  // 解析結果預覽 (僅編輯中顯示)
+  const parsed = editing ? evalExpr(expr) : null;
+  const isMultiTerm = editing && /[+\-*/]/.test(expr.replace(/^-/, "")); // 是否真的有算式
+  const previewError = editing && expr && !Number.isFinite(parsed);
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        inputMode="decimal"
+        className={`input-text w-full text-right ${className}`}
+        value={display}
+        placeholder={placeholder}
+        title={title}
+        onFocus={() => {
+          setExpr(value ? String(value) : "");
+          setEditing(true);
+        }}
+        onChange={e => setExpr(e.target.value)}
+        onBlur={() => {
+          const r = evalExpr(expr);
+          if (Number.isFinite(r)) onChange(Math.round(r));
+          else onChange(0);
+          setEditing(false);
+        }}
+        onKeyDown={e => {
+          if (e.key === "Enter") e.target.blur();
+        }}
+      />
+      {/* 即時預覽 - 算式有多項時顯示 */}
+      {isMultiTerm && Number.isFinite(parsed) && (
+        <div className="absolute right-1 -bottom-4 text-[10px] num" style={{ color: "var(--accent-deep)" }}>
+          = {Math.round(parsed).toLocaleString("zh-TW")}
+        </div>
+      )}
+      {previewError && (
+        <div className="absolute right-1 -bottom-4 text-[10px]" style={{ color: "var(--gold)" }}>
+          算式錯誤
+        </div>
+      )}
     </div>
   );
 }
@@ -3748,16 +3825,22 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                       </div>
                     </td>
                     <td className="py-2 text-right">
-                      <input type="number" className="input-text w-28 text-right"
-                        value={income.salary || ""} onChange={e => updateIncome(m.id, "salary", e.target.value)} />
+                      <div className="w-28 inline-block">
+                        <SumInput value={income.salary}
+                          onChange={v => updateIncome(m.id, "salary", v)} />
+                      </div>
                     </td>
                     <td className="py-2 text-right">
-                      <input type="number" className="input-text w-24 text-right"
-                        value={income.interest || ""} onChange={e => updateIncome(m.id, "interest", e.target.value)} />
+                      <div className="w-24 inline-block">
+                        <SumInput value={income.interest}
+                          onChange={v => updateIncome(m.id, "interest", v)} />
+                      </div>
                     </td>
                     <td className="py-2 text-right">
-                      <input type="number" className="input-text w-24 text-right"
-                        value={income.dividend || ""} onChange={e => updateIncome(m.id, "dividend", e.target.value)} />
+                      <div className="w-24 inline-block">
+                        <SumInput value={income.dividend}
+                          onChange={v => updateIncome(m.id, "dividend", v)} />
+                      </div>
                     </td>
                     <td className="py-2 text-right num text-xs" title={myComputable.map(p => p.name).join(", ")}>
                       {fmt(myRental.taxable)}
@@ -3766,8 +3849,10 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
                       </div>}
                     </td>
                     <td className="py-2 text-right">
-                      <input type="number" className="input-text w-24 text-right"
-                        value={income.other || ""} onChange={e => updateIncome(m.id, "other", e.target.value)} />
+                      <div className="w-24 inline-block">
+                        <SumInput value={income.other}
+                          onChange={v => updateIncome(m.id, "other", v)} />
+                      </div>
                     </td>
                   </tr>
                 );
@@ -3967,6 +4052,14 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
               </details>
             </div>
           </div>
+
+          {/* 捐贈試算器 */}
+          <DonationSimulator
+            filing={filing}
+            result={result}
+            params={params}
+            onApplyDonation={delta => updateField("itemizedDeductions.donationGeneral",
+              toNum(filing.itemizedDeductions.donationGeneral) + delta)} />
         </div>
       </div>
 
@@ -4304,12 +4397,128 @@ function FilingDetail({ filing, members, properties, rentalRecords, setRentalRec
   );
 }
 
+function DonationSimulator({ filing, result, params, onApplyDonation }) {
+  const [addAmount, setAddAmount] = React.useState(0);
+  // 計算: 現在的列舉合計 vs 加 X 後的列舉合計
+  // 注意: 一般捐贈上限 = 綜所 20%,超過部分不能扣;不限額捐贈無上限
+  const currentDonation = toNum(filing.itemizedDeductions.donationGeneral);
+  const donationCap = result.grossIncome * 0.2;
+  const currentDonationEffective = Math.min(currentDonation, donationCap);
+  const newDonation = currentDonation + addAmount;
+  const newDonationEffective = Math.min(newDonation, donationCap);
+  const effectiveDelta = newDonationEffective - currentDonationEffective;
+
+  // 現在的應納稅額 (用既有 result)
+  const currentNetIncome = result.netIncome;       // 綜合所得淨額 (扣除已扣除完)
+  const currentMarginalRate = (() => {
+    // 取現在的邊際稅率
+    if (currentNetIncome <= 590000) return 0.05;
+    if (currentNetIncome <= 1330000) return 0.12;
+    if (currentNetIncome <= 2660000) return 0.20;
+    if (currentNetIncome <= 4980000) return 0.30;
+    return 0.40;
+  })();
+
+  // 如果增加 effectiveDelta 列舉扣除,淨所得變少了
+  // 但要注意:列舉是否會超過標準?如果原本沒用列舉,要先彌補到等於標準才開始省
+  // 簡化: 假設仍採用列舉 (因為加捐贈通常會更多)
+  const newItemizedTotal = result.itemizedTotal + effectiveDelta;
+  const finalDeduction = Math.max(result.standardDeduction, newItemizedTotal);
+  const currentDeduction = Math.max(result.standardDeduction, result.itemizedTotal);
+  const deductionDelta = finalDeduction - currentDeduction;
+
+  // 估算節稅 (用邊際稅率簡化)
+  const estimatedSavings = Math.round(deductionDelta * currentMarginalRate);
+
+  if (result.grossIncome === 0) return null; // 沒所得不顯示
+
+  return (
+    <div className="mt-4 p-4 rounded" style={{ background: "#fdfcf7", border: "1px solid var(--accent)" }}>
+      <div className="ornament mb-2" style={{ color: "var(--accent-deep)" }}>DONATION SIMULATOR · 捐贈節稅試算</div>
+      <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+        想再多捐多少?系統估算能多省多少稅(以目前的邊際稅率 <b className="num">{(currentMarginalRate * 100).toFixed(0)}%</b> 試算)
+      </div>
+      <div className="grid grid-cols-3 gap-3 items-end">
+        <div>
+          <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>增加捐贈金額</label>
+          <SumInput value={addAmount} onChange={setAddAmount} />
+          <div className="text-[10px] mt-1" style={{ color: "var(--ink-mute)" }}>
+            可填算式,如 5000+3000
+          </div>
+        </div>
+        <div className="p-2 rounded text-xs" style={{ background: "white", border: "1px solid var(--line)" }}>
+          <div style={{ color: "var(--ink-mute)" }}>實際生效金額</div>
+          <div className="num font-medium">{fmt(effectiveDelta)}</div>
+          {newDonation > donationCap && (
+            <div className="text-[10px] mt-0.5" style={{ color: "var(--gold)" }}>
+              ⚠ 超過綜所 20% 上限,僅生效到 {fmt(donationCap)}
+            </div>
+          )}
+        </div>
+        <div className="p-2 rounded text-xs" style={{ background: "var(--green-soft)", border: "1px solid var(--green)" }}>
+          <div style={{ color: "var(--ink-mute)" }}>預估節稅</div>
+          <div className="num font-serif text-lg" style={{ color: "var(--green)" }}>
+            {fmt(estimatedSavings)}
+          </div>
+          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+            邊際稅率 {(currentMarginalRate * 100).toFixed(0)}%
+          </div>
+        </div>
+      </div>
+
+      {/* 對比 */}
+      {addAmount > 0 && (
+        <div className="mt-3 p-3 rounded text-xs" style={{ background: "white", border: "1px solid var(--line-soft)" }}>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <div style={{ color: "var(--ink-mute)" }}>目前一般捐贈</div>
+              <div className="num font-medium">{fmt(currentDonation)}</div>
+            </div>
+            <div>
+              <div style={{ color: "var(--ink-mute)" }}>加總後一般捐贈</div>
+              <div className="num font-medium">{fmt(newDonation)}</div>
+              <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                上限 {fmt(donationCap)}
+              </div>
+            </div>
+            <div>
+              <div style={{ color: "var(--ink-mute)" }}>淨成本 (出 ${fmt(addAmount)} − 退稅)</div>
+              <div className="num font-medium" style={{ color: "var(--accent-deep)" }}>
+                {fmt(addAmount - estimatedSavings)}
+              </div>
+            </div>
+          </div>
+          {deductionDelta < effectiveDelta && (
+            <div className="mt-2 text-[10px]" style={{ color: "var(--gold)" }}>
+              ⓘ 加捐贈後若列舉仍 ≤ 標準扣除額,只節稅到「彌補到標準」那一段,後續才開始實際省稅
+            </div>
+          )}
+        </div>
+      )}
+
+      {addAmount > 0 && (
+        <div className="mt-3 flex justify-end gap-2">
+          <button className="btn-secondary text-xs" onClick={() => setAddAmount(0)}>清除試算</button>
+          <button className="btn-primary text-xs"
+            onClick={() => {
+              if (confirm(`確定要把 ${fmt(addAmount)} 加到「一般捐贈」欄位?`)) {
+                onApplyDonation(addAmount);
+                setAddAmount(0);
+              }
+            }}>
+            ✓ 加到一般捐贈
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DeductionInput({ label, hint, value, onChange }) {
   return (
     <div>
       <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>{label}</label>
-      <input type="number" className="input-text w-full text-right"
-        value={value || ""} onChange={e => onChange(Number(e.target.value) || 0)} />
+      <SumInput value={value} onChange={onChange} />
       <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>{hint}</div>
     </div>
   );
