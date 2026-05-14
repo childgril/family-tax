@@ -1334,17 +1334,22 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
 
   if (noContractInYear && override.totalAnnualRent !== undefined && override.totalAnnualRent > 0) {
     const isPub = override.manualType === "public";
+    const isLand = property.assetType === "land";
     return [{
       id: `manual_${property.id}_${year}`,
-      name: `${property.name} (手動補列)`,
+      name: `${property.name}${isLand ? " (土地·手動)" : " (手動補列)"}`,
       address: property.address,
       ownerId: property.ownerId,
-      type: isPub ? "public" : "general",
+      // 土地走土地稅務 (扣地價稅);公益不適用於土地;否則一般 43%
+      type: isLand ? "land" : (isPub ? "public" : "general"),
       monthlyRent: Math.round(toNum(override.totalAnnualRent) / 12),
       months: 12,
       annualRentDirect: toNum(override.totalAnnualRent),
+      landTax: toNum(property.landTax || 0),
       expenseRatio: 0.43,
-      note: `${isPub ? "公益" : "一般"}·手動補列 ${fmt(toNum(override.totalAnnualRent))}`,
+      note: isLand
+        ? `土地·手動補列 ${fmt(toNum(override.totalAnnualRent))} − 地價稅 ${fmt(toNum(property.landTax || 0))}`
+        : `${isPub ? "公益" : "一般"}·手動補列 ${fmt(toNum(override.totalAnnualRent))}`,
       _fromContract: true,
     }];
   }
@@ -1376,6 +1381,7 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
       });
 
       // === 一般部分 ===
+      const isLandAsset = property.assetType === "land";
       if (agg.manualTotal !== null) {
         // 手動模式: 一般部分 = 全年總租金 − 公益部分
         if (agg.appliedGeneralRent > 0) {
@@ -1383,15 +1389,18 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
           const generalTotalMonths = generalContracts.reduce((s, c) => s + c.months, 0) || 12;
           out.push({
             id: `gen_manual_${property.id}_${year}`,
-            name: `${property.name} (一般·手動)`,
+            name: `${property.name}${isLandAsset ? " (土地·手動)" : " (一般·手動)"}`,
             address: property.address,
             ownerId: property.ownerId,
-            type: "general",
+            type: isLandAsset ? "land" : "general",
             monthlyRent: Math.round(agg.appliedGeneralRent / generalTotalMonths),
             months: generalTotalMonths,
             annualRentDirect: agg.appliedGeneralRent,
+            landTax: toNum(property.landTax || 0),
             expenseRatio: 0.43,
-            note: `一般部分 = 手動總額 ${fmt(agg.manualTotal)} − 公益 ${fmt(agg.appliedPublicRent)}`,
+            note: isLandAsset
+              ? `土地·手動 = ${fmt(agg.manualTotal)} − 地價稅 ${fmt(toNum(property.landTax || 0))}`
+              : `一般部分 = 手動總額 ${fmt(agg.manualTotal)} − 公益 ${fmt(agg.appliedPublicRent)}`,
             _fromContract: true,
           });
         }
@@ -1401,15 +1410,18 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
         generalContracts.forEach(c => {
           out.push({
             id: `gen_${c.contractId}_${year}`,
-            name: `${property.name} · ${c.tenantName}`,
+            name: `${property.name} · ${c.tenantName}${isLandAsset ? " (土地)" : ""}`,
             address: property.address,
             ownerId: property.ownerId,
-            type: "general",
+            type: isLandAsset ? "land" : "general",
             monthlyRent: c.monthly,
             months: c.months,
             annualRentDirect: c.rent,
+            landTax: toNum(property.landTax || 0),
             expenseRatio: 0.43,
-            note: `一般出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月`,
+            note: isLandAsset
+              ? `土地出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月 · 地價稅 ${fmt(toNum(property.landTax || 0))}`
+              : `一般出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月`,
             _fromContract: true,
           });
         });
@@ -2409,9 +2421,19 @@ function PropertiesPage({ data, setData, year }) {
                       </td>
                       <td className="px-3 py-3 text-xs align-top">{owner?.name || "—"}</td>
                       <td className="px-3 py-3 align-top">
-                        <div className="font-medium">{p.name || p.address || "(未命名)"}</div>
+                        <div className="font-medium flex items-center gap-1">
+                          {p.name || p.address || "(未命名)"}
+                          {p.assetType === "land" && (
+                            <span className="chip text-[10px]" style={{ background: "#e8e2d5", color: "var(--ink)" }}>🌳 土地</span>
+                          )}
+                        </div>
                         {p.name !== p.address && p.address && (
                           <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{p.address}</div>
+                        )}
+                        {p.assetType === "land" && toNum(p.landTax || 0) > 0 && (
+                          <div className="text-[10px] num" style={{ color: "var(--ink-mute)" }}>
+                            地價稅 {fmt(toNum(p.landTax))}
+                          </div>
                         )}
                       </td>
                       <td className="px-3 py-3 align-top">
@@ -4517,9 +4539,14 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       <div className="flex items-baseline gap-2">
                         {p.serial && <span className="chip chip-accent text-[10px] num">{p.serial}</span>}
                         <span className="font-serif text-base font-medium">{p.address || p.name}</span>
+                        {p.assetType === "land" && (
+                          <span className="chip text-[10px]" style={{ background: "#e8e2d5", color: "var(--ink)" }}>🌳 土地</span>
+                        )}
                       </div>
                       <div className="text-xs mt-0.5" style={{ color: "var(--ink-mute)" }}>
-                        {owner?.name}{p.name && p.name !== p.address ? ` · ${p.name}` : ""}{!hasContracts && " · 本年度無合約"}
+                        {owner?.name}{p.name && p.name !== p.address ? ` · ${p.name}` : ""}
+                        {p.assetType === "land" && toNum(p.landTax || 0) > 0 && ` · 地價稅 ${fmt(toNum(p.landTax))}`}
+                        {!hasContracts && " · 本年度無合約"}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -4580,31 +4607,41 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
                           {override?.totalAnnualRent !== undefined && (
                             <div className="ml-5 space-y-2">
-                              <div className="flex items-center gap-2">
-                                <span style={{ minWidth: "85px" }}>類型:</span>
-                                <div className="flex gap-1">
-                                  <label className={`px-2 py-1 rounded cursor-pointer text-xs border ${(override.manualType || "general") === "general" ? "border-2 font-medium" : ""}`}
-                                    style={{
-                                      borderColor: (override.manualType || "general") === "general" ? "var(--gold)" : "var(--line)",
-                                      background: (override.manualType || "general") === "general" ? "#fef9ec" : "white"
-                                    }}>
-                                    <input type="radio" name={`mtype_${p.id}`} className="mr-1"
-                                      checked={(override.manualType || "general") === "general"}
-                                      onChange={() => updateRentOverride(p.id, { manualType: "general" })} />
-                                    一般 (43% 費用率)
-                                  </label>
-                                  <label className={`px-2 py-1 rounded cursor-pointer text-xs border ${override.manualType === "public" ? "border-2 font-medium" : ""}`}
-                                    style={{
-                                      borderColor: override.manualType === "public" ? "var(--green)" : "var(--line)",
-                                      background: override.manualType === "public" ? "var(--green-soft)" : "white"
-                                    }}>
-                                    <input type="radio" name={`mtype_${p.id}`} className="mr-1"
-                                      checked={override.manualType === "public"}
-                                      onChange={() => updateRentOverride(p.id, { manualType: "public" })} />
-                                    公益 (15k/月免稅+60%)
-                                  </label>
+                              {p.assetType === "land" ? (
+                                <div className="flex items-center gap-2">
+                                  <span style={{ minWidth: "85px" }}>類型:</span>
+                                  <span className="chip text-[10px]" style={{ background: "#e8e2d5", color: "var(--ink)" }}>🌳 土地</span>
+                                  <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                                    (不適用 43% 費用率,只能扣地價稅)
+                                  </span>
                                 </div>
-                              </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <span style={{ minWidth: "85px" }}>類型:</span>
+                                  <div className="flex gap-1">
+                                    <label className={`px-2 py-1 rounded cursor-pointer text-xs border ${(override.manualType || "general") === "general" ? "border-2 font-medium" : ""}`}
+                                      style={{
+                                        borderColor: (override.manualType || "general") === "general" ? "var(--gold)" : "var(--line)",
+                                        background: (override.manualType || "general") === "general" ? "#fef9ec" : "white"
+                                      }}>
+                                      <input type="radio" name={`mtype_${p.id}`} className="mr-1"
+                                        checked={(override.manualType || "general") === "general"}
+                                        onChange={() => updateRentOverride(p.id, { manualType: "general" })} />
+                                      一般 (43% 費用率)
+                                    </label>
+                                    <label className={`px-2 py-1 rounded cursor-pointer text-xs border ${override.manualType === "public" ? "border-2 font-medium" : ""}`}
+                                      style={{
+                                        borderColor: override.manualType === "public" ? "var(--green)" : "var(--line)",
+                                        background: override.manualType === "public" ? "var(--green-soft)" : "white"
+                                      }}>
+                                      <input type="radio" name={`mtype_${p.id}`} className="mr-1"
+                                        checked={override.manualType === "public"}
+                                        onChange={() => updateRentOverride(p.id, { manualType: "public" })} />
+                                      公益 (15k/月免稅+60%)
+                                    </label>
+                                  </div>
+                                </div>
+                              )}
                               <div className="flex items-center gap-2">
                                 <span style={{ minWidth: "85px" }}>全年總租金:</span>
                                 <div className="w-40">
@@ -4613,9 +4650,27 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                                 </div>
                                 <button className="btn-secondary text-[10px] ml-auto" onClick={() => clearRentOverride(p.id)}>↻ 清除</button>
                               </div>
+                              {p.assetType === "land" && (
+                                <div className="flex items-center gap-2">
+                                  <span style={{ minWidth: "85px" }}>當年地價稅:</span>
+                                  <div className="w-40">
+                                    <SumInput value={p.landTax || 0}
+                                      onChange={v => {
+                                        // 直接更新該 property 的 landTax (需要 setProperties)
+                                        if (setProperties) {
+                                          setProperties(properties.map(pp => pp.id === p.id ? { ...pp, landTax: v } : pp));
+                                        }
+                                      }} />
+                                  </div>
+                                  <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                                    應稅 = 全年租金 − 地價稅
+                                  </span>
+                                </div>
+                              )}
                               <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                                ⓘ 適用情境:土地租金、停車位、未簽紙本合約的口頭租賃等。
-                                填入金額後會直接計入今年度應稅。
+                                ⓘ {p.assetType === "land"
+                                  ? "土地出租:稅法規定只能扣「該地當年繳納的地價稅」,不可使用 43% 費用率"
+                                  : "適用情境:停車位、未簽紙本合約的口頭租賃等"}
                               </div>
                               {/* 應稅顯示 */}
                               {override.totalAnnualRent > 0 && (
@@ -5321,14 +5376,15 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
 }
 
 function OfficialFormView({ result, year, filing }) {
-  // 拿關鍵數字
-  const grossIncome = result.grossIncome;
-  const exemption = result.exemption;
-  const generalDeduction = result.useItemized ? result.itemizedTotal : result.standardDeduction;
-  const specialTotal = result.specialTotal;
+  if (!result || !result.params) return null;
+  // 拿關鍵數字 (全部加 || 0 防 undefined)
+  const grossIncome = result.grossIncome || 0;
+  const exemption = result.exemption || 0;
+  const generalDeduction = (result.useItemized ? result.itemizedTotal : result.standardDeduction) || 0;
+  const specialTotal = result.specialTotal || 0;
   const totalDeduction = generalDeduction + specialTotal;
   const blDiff = result.blDiff || 0;
-  const netIncome = result.netIncome;
+  const netIncome = result.netIncome || 0;
   const rate = result.taxRate || 0;
   const deductValue = result.taxDeductValue || 0;
   const taxBeforeCredits = result.tax || 0;
@@ -5336,7 +5392,15 @@ function OfficialFormView({ result, year, filing }) {
   const repurchaseCredit = result.repurchaseCredit || 0;
   const otherCredit = result.otherCredit || 0;
   const prepaidTax = result.prepaidTax || 0;
-  const finalDue = result.finalDue;
+  const finalDue = result.finalDue || 0;
+  const itemizedDetail = result.itemizedDetail || {};
+  const filers = result.filers || [];
+  const blTotal = result.blTotal || 0;
+  const blcompare = result.blcompare || 0;
+  const interest = result.interest || 0;
+  const savings = result.savings || 0;
+  const dividend = result.dividend || 0;
+  const itemizedDeductions = filing.itemizedDeductions || {};
 
   return (
     <div className="card mb-4" style={{ background: "white" }}>
@@ -5414,9 +5478,9 @@ function OfficialFormView({ result, year, filing }) {
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span>每人 {fmt(result.params.basicLivingExp)}</span>
               <span className="font-bold">×</span>
-              <span>{result.filers.length} 人 = {fmt(result.blTotal)}</span>
+              <span>{filers.length} 人 = {fmt(blTotal)}</span>
               <span className="font-bold">−</span>
-              <span>(免稅額 + 一般扣除 + 部分特扣) {fmt(result.blcompare)}</span>
+              <span>(免稅額 + 一般扣除 + 部分特扣) {fmt(blcompare)}</span>
               <span className="font-bold">=</span>
               <span className="font-medium" style={{ color: blDiff > 0 ? "var(--green)" : "var(--ink-mute)" }}>
                 差額 {fmt(blDiff)}
@@ -5429,14 +5493,14 @@ function OfficialFormView({ result, year, filing }) {
         </div>
 
         {/* === 3. 股利可抵減稅額 === */}
-        {result.dividend > 0 && (
+        {dividend > 0 && (
           <div>
             <div className="font-medium mb-2" style={{ color: "var(--accent-deep)" }}>
               ★ 股利可抵減稅額
             </div>
             <div className="p-3 rounded num text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span>股利合計 {fmt(result.dividend)}</span>
+                <span>股利合計 {fmt(dividend)}</span>
                 <span className="font-bold">×</span>
                 <span>8.5%</span>
                 <span className="font-bold">=</span>
@@ -5472,31 +5536,31 @@ function OfficialFormView({ result, year, filing }) {
                 <td className="px-3 py-2">
                   3. 儲蓄投資特別扣除額
                   <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                    全戶利息 {fmt(result.interest)} (上限 {fmt(result.params.savingsDeduction)})
+                    全戶利息 {fmt(interest)} (上限 {fmt(result.params.savingsDeduction)})
                   </div>
                 </td>
-                <td className="px-3 py-2 text-right">{fmt(result.savings)}</td>
+                <td className="px-3 py-2 text-right">{fmt(savings)}</td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
                 <td className="px-3 py-2">4. 身心障礙特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.disabilityDed)}</td>
+                <td className="px-3 py-2 text-right">{fmt(result.disabilityDed || 0)}</td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
                 <td className="px-3 py-2">5. 教育學費特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.educationDed)}</td>
+                <td className="px-3 py-2 text-right">{fmt(result.educationDed || 0)}</td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
                 <td className="px-3 py-2">6. 幼兒學前特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.preschoolDed)}</td>
+                <td className="px-3 py-2 text-right">{fmt(result.preschoolDed || 0)}</td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
                 <td className="px-3 py-2">7. 長期照顧特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.longTermCareDed)}</td>
+                <td className="px-3 py-2 text-right">{fmt(result.longTermCareDed || 0)}</td>
               </tr>
               {year >= 114 && (
                 <tr style={{ borderBottom: "1px solid var(--line)" }}>
                   <td className="px-3 py-2">8. 房屋租金支出特別扣除額</td>
-                  <td className="px-3 py-2 text-right">{fmt(result.rentDeductActual)}</td>
+                  <td className="px-3 py-2 text-right">{fmt(result.rentDeductActual || 0)}</td>
                 </tr>
               )}
               <tr style={{ background: "#fafaf6", borderTop: "2px solid var(--ink)" }}>
@@ -5508,7 +5572,7 @@ function OfficialFormView({ result, year, filing }) {
         </div>
 
         {/* === 5. 列舉扣除額明細 (僅當採列舉時顯示) === */}
-        {result.useItemized && result.itemizedDetail && (
+        {result.useItemized && (
           <div>
             <div className="font-medium mb-2" style={{ color: "var(--accent-deep)" }}>
               ★ 列舉扣除額明細
@@ -5523,14 +5587,14 @@ function OfficialFormView({ result, year, filing }) {
               </thead>
               <tbody>
                 {[
-                  ["對機關或團體之捐贈 (現金,≤20%綜所)", toNum(filing.itemizedDeductions?.donationGeneral), result.itemizedDetail.donationGeneral],
-                  ["對政府捐贈等(不限額)", toNum(filing.itemizedDeductions?.donationUnlimited), result.itemizedDetail.donationUnlimited],
-                  ["人身保險費 - 非健保 (每人≤24k)", toNum(filing.itemizedDeductions?.insurancePersonal), result.itemizedDetail.insurancePersonal],
-                  ["人身保險費 - 健保 (不限額)", toNum(filing.itemizedDeductions?.insuranceHealth), result.itemizedDetail.insuranceHealth],
-                  ["醫藥及生育費 (不限額)", toNum(filing.itemizedDeductions?.medical), result.itemizedDetail.medical],
-                  ["災害損失", toNum(filing.itemizedDeductions?.disaster), result.itemizedDetail.disaster],
-                  ["自用住宅購屋借款利息", toNum(filing.itemizedDeductions?.mortgageInterest), result.itemizedDetail.mortgageInterest],
-                  ...(year < 114 ? [["房屋租金支出", toNum(filing.rentSupportPaid), result.rentDeductActual]] : []),
+                  ["對機關或團體之捐贈 (現金,≤20%綜所)", toNum(itemizedDeductions.donationGeneral), itemizedDetail.donationGeneral || 0],
+                  ["對政府捐贈等(不限額)", toNum(itemizedDeductions.donationUnlimited), itemizedDetail.donationUnlimited || 0],
+                  ["人身保險費 - 非健保 (每人≤24k)", toNum(itemizedDeductions.insurancePersonal), itemizedDetail.insurancePersonal || 0],
+                  ["人身保險費 - 健保 (不限額)", toNum(itemizedDeductions.insuranceHealth), itemizedDetail.insuranceHealth || 0],
+                  ["醫藥及生育費 (不限額)", toNum(itemizedDeductions.medical), itemizedDetail.medical || 0],
+                  ["災害損失", toNum(itemizedDeductions.disaster), itemizedDetail.disaster || 0],
+                  ["自用住宅購屋借款利息", toNum(itemizedDeductions.mortgageInterest), itemizedDetail.mortgageInterest || 0],
+                  ...(year < 114 ? [["房屋租金支出", toNum(filing.rentSupportPaid), result.rentDeductActual || 0]] : []),
                 ].filter(([_, actual]) => actual > 0).map(([label, actual, allowed], i) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--line-soft)" }}>
                     <td className="px-3 py-1">{label}</td>
@@ -5540,7 +5604,7 @@ function OfficialFormView({ result, year, filing }) {
                 ))}
                 <tr style={{ background: "#fafaf6", borderTop: "2px solid var(--ink)" }}>
                   <td className="px-3 py-2 font-medium" colSpan={2}>可扣除金額合計</td>
-                  <td className="px-3 py-2 text-right font-medium">{fmt(result.itemizedTotal)}</td>
+                  <td className="px-3 py-2 text-right font-medium">{fmt(result.itemizedTotal || 0)}</td>
                 </tr>
               </tbody>
             </table>
@@ -6855,6 +6919,43 @@ const SAMPLE_FAMILY = (() => {
 // ============================================================
 // 主 App
 // ============================================================
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { this.setState({ info }); console.error("ErrorBoundary caught:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-8" style={{ background: "#fef5f5", border: "2px solid #c83232", borderRadius: 6, margin: 20 }}>
+          <div className="font-serif text-lg mb-2" style={{ color: "#c83232" }}>⚠ 頁面發生錯誤</div>
+          <div className="text-sm mb-3" style={{ color: "var(--ink-soft)" }}>
+            程式碰到 runtime 錯誤導致渲染中止。可以試試:
+            <ol className="list-decimal list-inside mt-2 space-y-1">
+              <li>重新整理頁面 (Cmd/Ctrl + R)</li>
+              <li>切到其他頁(例如「家庭成員」)再回來</li>
+              <li>把錯誤訊息(下方)貼給開發者</li>
+            </ol>
+          </div>
+          <div className="p-3 rounded text-xs num" style={{ background: "white", border: "1px solid var(--line)", maxHeight: 300, overflow: "auto" }}>
+            <div className="font-medium mb-1">錯誤訊息:</div>
+            <pre style={{ whiteSpace: "pre-wrap" }}>{String(this.state.error?.message || this.state.error)}</pre>
+            {this.state.error?.stack && (
+              <>
+                <div className="font-medium mt-2 mb-1">Stack trace:</div>
+                <pre style={{ whiteSpace: "pre-wrap", color: "var(--ink-mute)" }}>{this.state.error.stack.split("\n").slice(0, 8).join("\n")}</pre>
+              </>
+            )}
+          </div>
+          <button className="btn-primary text-xs mt-3" onClick={() => this.setState({ error: null, info: null })}>
+            ↻ 嘗試恢復
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   const [page, setPage] = useState("dashboard");
   const [year, setYear] = useState(DEFAULT_YEAR);
@@ -6873,7 +6974,7 @@ function App() {
           {page === "members" && <MembersPage {...props} />}
           {page === "properties" && <PropertiesPage {...props} />}
           {page === "contracts" && <ContractsPage {...props} />}
-          {page === "filing" && <FilingPage {...props} />}
+          {page === "filing" && <ErrorBoundary><FilingPage {...props} /></ErrorBoundary>}
           {page === "compare" && <ComparePage {...props} />}
           {page === "history" && <HistoryPage {...props} />}
           {page === "sources" && <SourcesPage {...props} />}
