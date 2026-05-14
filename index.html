@@ -1142,7 +1142,11 @@ function computeTaxForFiling(filing, members, year) {
     ? Math.min(Math.max(0, toNum(filing.savingsOverrideAmount)), params.savingsDeduction)
     : savingsAuto;
   const disabilityDed = disabilityCount * params.disabilityDeduction;
-  const educationDed = Math.min(studentCount, filers.length) * params.educationDeduction;
+  // 教育學費: 預設按 isStudent 子女算 25,000 × 人數;允許手動覆寫 (例: 申報書沒列)
+  const educationDedAuto = Math.min(studentCount, filers.length) * params.educationDeduction;
+  const educationDed = filing.educationDedOverride !== undefined && filing.educationDedOverride !== null && filing.educationDedOverride !== ""
+    ? toNum(filing.educationDedOverride)
+    : educationDedAuto;
   // 幼兒學前: 第一名定額,第二名以上提高 (依 114 年制度)
   let preschoolDed = 0;
   if (preschoolCount > 0) {
@@ -1273,6 +1277,8 @@ function computeTaxForFiling(filing, members, year) {
     generalDeduction: generalDeductionActual,
     disabilityDed,
     educationDed,
+    educationDedAuto,
+    studentCount,
     preschoolDed,
     longTermCareDed,
     rentDeductActual,
@@ -4563,6 +4569,57 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
           </div>
         </div>
       </div>
+
+      {/* 特別扣除額覆寫 (教育/幼兒/長照/身障) — 罕用,僅在實際與系統不符時使用 */}
+      {(result.educationDedAuto > 0 || result.preschoolDed > 0 || result.longTermCareDed > 0 || result.disabilityDed > 0
+        || filing.educationDedOverride !== undefined) && (
+        <div className="card">
+          <details>
+            <summary className="px-5 py-3 cursor-pointer text-sm font-medium" style={{ borderBottom: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+              ▸ 特別扣除額覆寫(教育學費等) <span className="text-xs ml-2" style={{ color: "var(--ink-mute)" }}>(申報書與系統不符時使用)</span>
+            </summary>
+            <div className="p-5 space-y-3 text-sm">
+              {/* 教育學費 */}
+              <div className="flex items-center gap-3">
+                <span style={{ minWidth: "100px", color: "var(--ink-soft)" }}>教育學費特扣</span>
+                <div className="num" style={{ minWidth: "80px", color: "var(--ink-mute)" }}>
+                  系統算: {fmt(result.educationDedAuto || 0)}
+                  {result.studentCount > 0 && (
+                    <span className="text-[10px] ml-1">({result.studentCount} 位在學)</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input type="number"
+                    className="input-text w-24 text-right text-sm"
+                    placeholder="覆寫"
+                    value={filing.educationDedOverride !== undefined && filing.educationDedOverride !== null ? filing.educationDedOverride : ""}
+                    onChange={e => {
+                      const v = e.target.value;
+                      onChange({ ...filing, educationDedOverride: v === "" ? undefined : Number(v) });
+                    }} />
+                  {filing.educationDedOverride !== undefined && filing.educationDedOverride !== null && (
+                    <button className="text-[10px] hover:underline" style={{ color: "var(--ink-mute)" }}
+                      onClick={() => onChange({ ...filing, educationDedOverride: undefined })}>
+                      ↻ 還原
+                    </button>
+                  )}
+                </div>
+                <span className="text-[10px]" style={{ color: filing.educationDedOverride !== undefined ? "var(--gold)" : "var(--ink-mute)" }}>
+                  {filing.educationDedOverride !== undefined
+                    ? `實際採用: ${fmt(toNum(filing.educationDedOverride))} (已覆寫)`
+                    : `若申報書沒列,改成 0`}
+                </span>
+              </div>
+              <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                ⓘ 教育學費資格:子女、孫子女**就讀大專以上院校**,每人 25,000(空大/五專前 3 年不適用)。
+                若你的小孩有勾「在學中」但實際不符資格(例如就讀高中),建議:
+                <br />· <b>方法 1</b>:回成員頁取消勾選「在學中」(永久,影響所有年度)
+                <br />· <b>方法 2</b>:在此手動輸入 0(只影響本次申報)
+              </div>
+            </div>
+          </details>
+        </div>
+      )}
 
       {/* 列舉扣除額輸入 */}
       <div className="card">
