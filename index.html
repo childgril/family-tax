@@ -4499,7 +4499,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               const lastYearAgg = aggregateContractsForYear(contracts, p.id, lastYear, {});
 
               return (
-                <details key={p.id} className="rounded" open={hasContracts} style={{ background: isIncluded ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
+                <details key={p.id} className="rounded" open={hasContracts && isIncluded} style={{ background: isIncluded ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
                   <summary className="px-3 py-2 flex items-center gap-3 cursor-pointer rounded-t" style={{
                     background: hasContracts && isIncluded ? "var(--green-soft, #f5fbef)" : "transparent",
                     borderBottom: hasContracts && isIncluded ? "1px solid var(--green)" : "none",
