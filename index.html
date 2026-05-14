@@ -302,8 +302,11 @@ const RELATIONS = {
 
 // 判斷某成員是否能享 70 歲提高免稅額
 // 規定: 本人、配偶、直系尊親屬 (parent/grandparent/parentInLaw) 滿 70 歲適用
-function canUseElderExemption(member, role) {
-  if (!member || member.age === "" || Number(member.age) < 70) return false;
+// year 為申報年度,用於以該年 12/31 計算歲數
+function canUseElderExemption(member, role, year) {
+  if (!member) return false;
+  const age = year ? getMemberAge(member, year) : toNum(member.age);
+  if (age < 70) return false;
   if (role === "taxpayer" || role === "spouse") return true;
   const r = RELATIONS[member.relation];
   return r && r.isLinealAscendant;
@@ -533,6 +536,22 @@ function parseRocDate(str) {
 function formatRocDate(d) {
   if (!d) return "";
   return `${d.y}/${String(d.m).padStart(2,"0")}/${String(d.d).padStart(2,"0")}`;
+}
+
+// 算成員在「申報年度」12/31 時的歲數
+// 規則(財政部):家戶成員年齡以「所得所屬年度終了 12/31」為準
+// 優先用 member.birthDate (民國年/月/日);若無則退回 member.age (使用者手填)
+function getMemberAge(member, taxYear) {
+  if (!member) return 0;
+  const bd = parseRocDate(member.birthDate);
+  if (bd && taxYear) {
+    // 在該年度 12/31 時的歲數
+    // 例:bd = 50/3/15 (民國 50 年 3 月),申報 114 年 → 該年 12/31 時 114-50 = 64 歲
+    // 因為 12/31 一定在 3/15 之後,所以不用扣 1
+    return taxYear - bd.y;
+  }
+  // 沒填出生日 → 退回手填年齡
+  return toNum(member.age);
 }
 // ROC -> JS Date
 function rocToDate(d) {
@@ -1062,13 +1081,15 @@ function computeTaxForFiling(filing, members, year) {
     if (m.id === filing.taxpayerId) role = "taxpayer";
     else if (m.id === filing.spouseId) role = "spouse";
 
+    const memberAge = getMemberAge(m, year);
+
     if (m.isDisabled) disabilityCount++;
-    if (m.age >= 70) elderCount++;
+    if (memberAge >= 70) elderCount++;
     // 教育學費: 限子女、孫子女 (財政部解釋以子女為限,孫子女實務上認可)
     const rel = RELATIONS[m.relation];
     if (m.isStudent && rel && rel.isChild) studentCount++;
-    // 幼兒學前: 限子女、孫子女且 < 6 歲
-    if (m.age !== undefined && m.age !== "" && Number(m.age) < 6 && rel && rel.isChild) preschoolCount++;
+    // 幼兒學前: 限子女、孫子女且 < 6 歲 (年齡以該年度 12/31 為準)
+    if (memberAge > 0 && memberAge < 6 && rel && rel.isChild) preschoolCount++;
     if (m.needsLongTermCare) longTermCareCount++;
   });
 
@@ -1080,7 +1101,7 @@ function computeTaxForFiling(filing, members, year) {
     let role = "dependent";
     if (m.id === filing.taxpayerId) role = "taxpayer";
     else if (m.id === filing.spouseId) role = "spouse";
-    return sum + (canUseElderExemption(m, role) ? params.exemptionElder : params.exemption);
+    return sum + (canUseElderExemption(m, role, year) ? params.exemptionElder : params.exemption);
   }, 0);
 
   // === 3. 一般扣除額: 標準 vs 列舉 ===
@@ -1272,7 +1293,7 @@ function computeTaxForFiling(filing, members, year) {
       let role = "dependent";
       if (m.id === filing.taxpayerId) role = "taxpayer";
       else if (m.id === filing.spouseId) role = "spouse";
-      return { memberId: m.id, amount: canUseElderExemption(m, role) ? params.exemptionElder : params.exemption, role };
+      return { memberId: m.id, amount: canUseElderExemption(m, role, year) ? params.exemptionElder : params.exemption, role };
     }),
     generalDeduction: generalDeductionActual,
     disabilityDed,
@@ -2133,25 +2154,35 @@ function MembersPage({ data, setData }) {
               </tr>
             </thead>
             <tbody>
-              {data.members.map(m => (
+              {data.members.map(m => {
+                // 計算目前年齡 (用今日所在年度)
+                const currentYearROC = new Date().getFullYear() - 1911;
+                const ageNow = getMemberAge(m, currentYearROC);
+                return (
                 <tr key={m.id} className="table-row">
                   <td className="px-5 py-3 font-medium">{m.name}</td>
                   <td className="px-3 py-3 num text-xs" style={{ color: "var(--ink-mute)" }}>{m.idNumber || "—"}</td>
                   <td className="px-3 py-3"><span className="chip">{(RELATIONS[m.relation] || {}).label || m.relation}</span></td>
-                  <td className="px-3 py-3 text-center num">{m.age || "—"}</td>
+                  <td className="px-3 py-3 text-center num">
+                    {ageNow || "—"}
+                    {m.birthDate && (
+                      <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>{m.birthDate}</div>
+                    )}
+                  </td>
                   <td className="px-3 py-3 space-x-1">
                     {m.isDisabled && <span className="chip chip-amber">身心障礙</span>}
-                    {m.age >= 70 && <span className="chip chip-accent">70歲以上</span>}
+                    {ageNow >= 70 && <span className="chip chip-accent">70歲以上</span>}
                     {m.isStudent && <span className="chip chip-green">在學</span>}
                     {m.needsLongTermCare && <span className="chip chip-red">需長照</span>}
-                    {m.age !== "" && Number(m.age) < 6 && <span className="chip chip-green">幼兒</span>}
+                    {ageNow > 0 && ageNow < 6 && <span className="chip chip-green">幼兒</span>}
                   </td>
                   <td className="px-5 py-3 text-right space-x-1">
                     <button className="btn-secondary text-xs" onClick={() => setEditing(m)}>編輯</button>
                     <button className="btn-danger text-xs" onClick={() => remove(m.id)}>刪除</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -2210,9 +2241,39 @@ function MemberModal({ member, onSave, onClose }) {
                 {Object.entries(RELATIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
               </select>
             </Field>
-            <Field label="年齡">
-              <input type="number" className="input-text w-full" value={m.age} onChange={e => setM({...m, age: e.target.value === "" ? "" : Number(e.target.value)})} />
+            <Field label="出生年月日 (民國年/月/日,例: 50/3/15)">
+              <input type="text"
+                className="input-text-plain w-full"
+                placeholder="例: 50/3/15 或 050/03/15"
+                value={m.birthDate || ""}
+                onChange={e => setM({...m, birthDate: e.target.value})} />
             </Field>
+          </div>
+          {/* 年齡:優先用出生日期算,沒填則用 m.age */}
+          <div className="text-xs p-2 rounded flex items-center justify-between" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <span style={{ color: "var(--ink-soft)" }}>
+              {(() => {
+                const bd = parseRocDate(m.birthDate);
+                if (bd) {
+                  const now = new Date();
+                  const thisYearROC = now.getFullYear() - 1911;
+                  // 目前年齡 (今天)
+                  const ageNow = thisYearROC - bd.y - (
+                    (now.getMonth() + 1 < bd.m || (now.getMonth() + 1 === bd.m && now.getDate() < bd.d)) ? 1 : 0
+                  );
+                  return <>✓ 由出生日期自動計算:目前約 <b>{ageNow}</b> 歲;每次申報時依「該年度 12/31」自動算</>;
+                }
+                return <>ⓘ 未填出生日期,將使用下方手動填的「目前年齡」(不會每年自動更新)</>;
+              })()}
+            </span>
+            <div className="flex items-center gap-1">
+              <span style={{ color: "var(--ink-mute)" }}>手動年齡:</span>
+              <input type="number"
+                className="input-text-plain w-16 text-right"
+                value={m.age === undefined ? "" : m.age}
+                placeholder="—"
+                onChange={e => setM({...m, age: e.target.value === "" ? "" : Number(e.target.value)})} />
+            </div>
           </div>
           {relHint && (
             <div className="text-xs p-2 rounded" style={{ background: "#fafaf6", color: "var(--ink-soft)", border: "1px solid var(--line)" }}>
@@ -7546,13 +7607,13 @@ const SAMPLE_FAMILY = (() => {
   const propIds = Array.from({ length: 4 }, () => uid());
   return {
     members: [
-      { id: ids[0], name: "陳大年", relation: "self",        age: 60, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "1234", note: "" },
-      { id: ids[1], name: "林秀英", relation: "spouse",      age: 58, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "5678", note: "" },
-      { id: ids[2], name: "陳志明", relation: "child",       age: 32, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "9012", note: "長子" },
-      { id: ids[3], name: "王美玲", relation: "spouse",      age: 30, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "3456", note: "媳婦 (志明配偶)" },
-      { id: ids[4], name: "陳小寶", relation: "grandchild",  age: 3,  isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: true,  idNumber: "7890", note: "孫子" },
-      { id: ids[5], name: "陳志強", relation: "child",       age: 28, isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "2468", note: "次子 (單身)" },
-      { id: ids[6], name: "陳福伯", relation: "parent",      age: 85, isDisabled: false, isStudent: false, needsLongTermCare: true,  cannotSupportSelf: false, coResident: false, idNumber: "1111", note: "父親 (直系尊親屬,70歲以上免稅額提高)" },
+      { id: ids[0], name: "陳大年", relation: "self",        age: 60, birthDate: "55/3/15",   isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "1234", note: "" },
+      { id: ids[1], name: "林秀英", relation: "spouse",      age: 58, birthDate: "57/8/20",   isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "5678", note: "" },
+      { id: ids[2], name: "陳志明", relation: "child",       age: 32, birthDate: "83/5/10",   isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "9012", note: "長子" },
+      { id: ids[3], name: "王美玲", relation: "spouse",      age: 30, birthDate: "85/11/3",   isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "3456", note: "媳婦 (志明配偶)" },
+      { id: ids[4], name: "陳小寶", relation: "grandchild",  age: 3,  birthDate: "112/6/8",   isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: true,  idNumber: "7890", note: "孫子" },
+      { id: ids[5], name: "陳志強", relation: "child",       age: 28, birthDate: "87/2/14",   isDisabled: false, isStudent: false, needsLongTermCare: false, cannotSupportSelf: false, coResident: false, idNumber: "2468", note: "次子 (單身)" },
+      { id: ids[6], name: "陳福伯", relation: "parent",      age: 85, birthDate: "30/4/22",   isDisabled: false, isStudent: false, needsLongTermCare: true,  cannotSupportSelf: false, coResident: false, idNumber: "1111", note: "父親 (直系尊親屬,70歲以上免稅額提高)" },
     ],
     properties: [
       { id: propIds[0], serial: "001", name: "001 中山北路套房", address: "台北市中山區", ownerId: ids[0], type: "general", monthlyRent: 25000, months: 12, expenseRatio: 0.43, note: "", taxFreeReason: "" },
