@@ -5024,14 +5024,14 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     borderBottom: isActive ? "1px solid var(--green)" : "none",
                   }}>
                     <span className="chevron text-xs" style={{ color: "var(--ink-mute)" }}>▸</span>
-                    {hasContracts ? (
-                      <input type="checkbox" checked={isIncluded}
-                        onChange={e => {
-                          e.stopPropagation();
-                          updateRentOverride(p.id, { includeInFiling: e.target.checked });
-                        }}
-                        onClick={e => e.stopPropagation()} />
-                    ) : null}
+                    <input type="checkbox" checked={isIncluded}
+                      onChange={e => {
+                        e.stopPropagation();
+                        updateRentOverride(p.id, { includeInFiling: e.target.checked });
+                      }}
+                      onClick={e => e.stopPropagation()}
+                      title={hasContracts ? "勾選 = 此物件計入本年度申報" : "勾選 = 此物件計入本年度申報 (即使沒合約,可在展開後手動補列租金)"}
+                    />
                     <div className="flex-1">
                       <div className="flex items-baseline gap-2">
                         <span className="font-serif text-base font-medium">{p.address || p.name}</span>
