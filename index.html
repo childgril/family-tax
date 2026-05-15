@@ -4651,18 +4651,30 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
           {!rentalSectionCollapsed && (<>
           {/* 申報書對照明細表 (跟申報書同欄位:地址 / 申報租金 / 所得總額) */}
           <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
-            <div className="text-xs font-medium mb-2" style={{ color: "var(--ink-soft)" }}>
-              📋 申報書對照明細表 ({year} 年度)
-              <span className="ml-2 font-normal" style={{ color: "var(--ink-mute)" }}>
-                · 跟申報書欄位一致,方便核對
-              </span>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-medium" style={{ color: "var(--ink-soft)" }}>
+                📋 申報書對照明細表 ({year} 年度)
+                <span className="ml-2 font-normal" style={{ color: "var(--ink-mute)" }}>
+                  · 跟申報書欄位一致,方便核對
+                </span>
+              </div>
+              {Object.keys(filing.rentalAuditChecked || {}).length > 0 && (
+                <button
+                  className="text-[10px] px-2 py-1 rounded hover:bg-gray-100"
+                  style={{ border: "1px solid var(--line)", color: "var(--ink-mute)" }}
+                  onClick={() => onChange({ ...filing, rentalAuditChecked: {} })}
+                  title="清除所有核對勾選">
+                  ✕ 清除核對 ({Object.keys(filing.rentalAuditChecked || {}).length})
+                </button>
+              )}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-xs" style={{ minWidth: "780px" }}>
+              <table className="w-full text-xs" style={{ minWidth: "820px" }}>
                 <thead>
                   <tr style={{ background: "white", borderBottom: "2px solid var(--ink-soft)" }}>
-                    <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>地址</th>
+                    <th className="text-center px-2 py-1.5 font-medium w-12" style={{ color: "var(--ink-mute)" }}>核對</th>
                     <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>歸戶</th>
+                    <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>地址</th>
                     <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
                     <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>實際租金<br/><span className="text-[9px]">(合約原值)</span></th>
                     <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>申報租金<br/><span className="text-[9px]">(實際採用)</span></th>
@@ -4710,6 +4722,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                           const declaredTaxable = isIncluded ? appliedTaxable : 0;
 
                           rows.push({
+                            auditKey: `c_${c.contractId}_${year}`,
                             address: p.address || p.name || "",
                             tenant: c.tenantName,
                             period: c.period,
@@ -4726,11 +4739,12 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                         // 沒合約 → 只有勾選且有 rentalRecords/手動補列才顯示
                         const computables = getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides);
                         if (computables.length > 0) {
-                          computables.forEach(comp => {
+                          computables.forEach((comp, idx) => {
                             const annual = comp.annualRentDirect || (comp.monthlyRent * comp.months) || 0;
                             if (annual === 0) return;
                             const taxable = computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
                             rows.push({
+                              auditKey: `m_${p.id}_${year}_${idx}`,
                               address: p.address || p.name || "",
                               tenant: comp.note || "手動輸入",
                               period: `${comp.months} 個月`,
@@ -4747,6 +4761,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                         } else {
                           // 完全沒合約沒手動 → 仍列出空行,讓使用者知道這個物件存在
                           rows.push({
+                            auditKey: `n_${p.id}_${year}`,
                             address: p.address || p.name || "",
                             tenant: "—",
                             period: "本年度無合約",
@@ -4766,7 +4781,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     if (rows.length === 0) {
                       return (
                         <tr>
-                          <td colSpan={7} className="text-center py-4 text-xs" style={{ color: "var(--ink-mute)" }}>
+                          <td colSpan={8} className="text-center py-4 text-xs" style={{ color: "var(--ink-mute)" }}>
                             本年度尚無租賃物件
                           </td>
                         </tr>
@@ -4780,11 +4795,28 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
                     return (
                       <>
-                        {rows.map((r, i) => (
+                        {rows.map((r, i) => {
+                          const auditChecked = !!(filing.rentalAuditChecked || {})[r.auditKey];
+                          return (
                           <tr key={i} style={{
                             borderBottom: "1px solid var(--line-soft)",
+                            background: auditChecked ? "#f5fbef" : "transparent",
                             opacity: r.isIncluded ? 1 : 0.55,
                           }}>
+                            <td className="text-center px-2 py-1.5">
+                              <input type="checkbox"
+                                checked={auditChecked}
+                                onChange={e => {
+                                  const next = { ...(filing.rentalAuditChecked || {}) };
+                                  if (e.target.checked) next[r.auditKey] = true;
+                                  else delete next[r.auditKey];
+                                  onChange({ ...filing, rentalAuditChecked: next });
+                                }}
+                                title="核對後勾選 (僅標記,不影響計算)" />
+                            </td>
+                            <td className="text-center px-2 py-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                              {r.ownerName}
+                            </td>
                             <td className="px-2 py-1.5">
                               <div className="text-xs">
                                 {r.isIncluded && <span style={{ color: "var(--green)" }}>✓ </span>}
@@ -4795,9 +4827,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                                 {r.isAdjusted && <span className="ml-1" style={{ color: "var(--gold)" }}>(手動)</span>}
                                 {r.isManualOnly && <span className="ml-1" style={{ color: "var(--gold)" }}>(無合約)</span>}
                               </div>
-                            </td>
-                            <td className="text-center px-2 py-1.5 text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                              {r.ownerName}
                             </td>
                             <td className="text-center px-2 py-1.5">
                               <span className="text-[10px]" style={{ color: r.typeColor }}>{r.typeLabel}</span>
@@ -4812,17 +4841,18 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                               {fmt(r.actualTaxable)}
                             </td>
                             <td className="text-right px-2 py-1.5 num font-medium" style={{
-                              background: "#f5fbef",
+                              background: auditChecked ? "#e8f3dc" : "#f5fbef",
                               color: r.isIncluded ? "var(--accent-deep)" : "var(--ink-mute)",
                             }}>
                               {fmt(r.declaredTaxable)}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                         {/* 合計列 */}
                         <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
-                          <td colSpan={3} className="text-right px-2 py-2 font-medium text-xs">
-                            合計({rows.length} 筆 · 計入 {rows.filter(r => r.isIncluded).length} 筆)
+                          <td colSpan={4} className="text-right px-2 py-2 font-medium text-xs">
+                            合計({rows.length} 筆 · 計入 {rows.filter(r => r.isIncluded).length} 筆 · 已核對 {rows.filter(r => (filing.rentalAuditChecked || {})[r.auditKey]).length} 筆)
                           </td>
                           <td className="text-right px-2 py-2 num text-[11px]" style={{ color: "var(--ink-mute)" }}>
                             {fmt(totalActualAnnual)}
