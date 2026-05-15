@@ -5115,6 +5115,146 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               依合約自動攤分,可勾選計入 / 手動覆寫金額
             </div>
           </div>
+
+          {/* 申報書對照明細表 (跟申報書同欄位:地址 / 申報租金 / 所得總額) */}
+          <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
+            <div className="text-xs font-medium mb-2" style={{ color: "var(--ink-soft)" }}>
+              📋 申報書對照明細表 ({year} 年度)
+              <span className="ml-2 font-normal" style={{ color: "var(--ink-mute)" }}>
+                · 跟申報書欄位一致,方便核對
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs" style={{ minWidth: "600px" }}>
+                <thead>
+                  <tr style={{ background: "white", borderBottom: "2px solid var(--ink-soft)" }}>
+                    <th className="text-center px-2 py-1.5 font-medium w-10" style={{ color: "var(--ink-mute)" }}>#</th>
+                    <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>地址</th>
+                    <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
+                    <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>歸戶</th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>申報租金<br/><span className="text-[9px]">(年度收入)</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>必要費用<br/><span className="text-[9px]">(43% 或地價稅)</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px", background: "#f5fbef" }}>所得總額<br/><span className="text-[9px]">(計入綜所)</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    // 對每個物件 + 每份合約,列出「地址 / 申報租金 / 所得總額」
+                    const rows = [];
+                    householdProperties.forEach(p => {
+                      const agg = aggregateContractsForYear(contracts, p.id, year, filing.manualRentOverrides);
+                      const owner = members.find(m => m.id === p.ownerId);
+                      const ownerName = owner ? owner.name : "—";
+                      const isLand = p.assetType === "land";
+
+                      if (!agg.anyContractInYear || agg.contracts.length === 0) {
+                        // 沒合約,跳過
+                        return;
+                      }
+
+                      agg.contracts.filter(c => c.months > 0).forEach(c => {
+                        const annual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                        // 算費用 + 所得總額
+                        const comp = {
+                          type: c.isPublic ? "public" : (isLand ? "land" : "general"),
+                          monthlyRent: c.monthly,
+                          months: c.months,
+                          annualRentDirect: annual,
+                          landTax: toNum(p.landTax || 0),
+                          expenseRatio: 0.43,
+                        };
+                        const breakdown = computeRentalIncome([comp], params).breakdown[0];
+                        const taxable = breakdown?.taxableIncome || 0;
+                        const expense = annual - taxable;
+                        const typeLabel = c.isPublic ? "公益" : (isLand ? "土地" : "一般");
+                        const typeColor = c.isPublic ? "var(--green)" : (isLand ? "var(--gold)" : "var(--ink-soft)");
+                        rows.push({
+                          propertySerial: p.serial || "",
+                          propertyName: p.name || "",
+                          address: p.address || "",
+                          tenant: c.tenantName,
+                          period: c.period,
+                          months: c.months,
+                          ownerName,
+                          typeLabel,
+                          typeColor,
+                          annual,
+                          expense,
+                          taxable,
+                          isAdjusted: c.isAdjusted,
+                        });
+                      });
+                    });
+
+                    if (rows.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={7} className="text-center py-4 text-xs" style={{ color: "var(--ink-mute)" }}>
+                            本年度尚無有效租賃合約
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    // 合計
+                    const totalAnnual = rows.reduce((s, r) => s + r.annual, 0);
+                    const totalExpense = rows.reduce((s, r) => s + r.expense, 0);
+                    const totalTaxable = rows.reduce((s, r) => s + r.taxable, 0);
+
+                    return (
+                      <>
+                        {rows.map((r, i) => (
+                          <tr key={i} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                            <td className="text-center px-2 py-1.5 num text-[10px]" style={{ color: "var(--ink-mute)" }}>{r.propertySerial}</td>
+                            <td className="px-2 py-1.5">
+                              <div className="text-xs">{r.address || r.propertyName}</div>
+                              <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>
+                                {r.tenant} · {r.period}
+                                {r.isAdjusted && <span className="ml-1" style={{ color: "var(--gold)" }}>(手動)</span>}
+                              </div>
+                            </td>
+                            <td className="text-center px-2 py-1.5">
+                              <span className="text-[10px]" style={{ color: r.typeColor }}>{r.typeLabel}</span>
+                            </td>
+                            <td className="text-center px-2 py-1.5 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                              {r.ownerName}
+                            </td>
+                            <td className="text-right px-2 py-1.5 num">{fmt(r.annual)}</td>
+                            <td className="text-right px-2 py-1.5 num text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                              {fmt(r.expense)}
+                            </td>
+                            <td className="text-right px-2 py-1.5 num font-medium" style={{ background: "#f5fbef", color: "var(--accent-deep)" }}>
+                              {fmt(r.taxable)}
+                            </td>
+                          </tr>
+                        ))}
+                        {/* 合計列 */}
+                        <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
+                          <td colSpan={4} className="text-right px-2 py-2 font-medium text-xs">
+                            合計({rows.length} 筆合約)
+                          </td>
+                          <td className="text-right px-2 py-2 num font-medium">
+                            {fmt(totalAnnual)}
+                          </td>
+                          <td className="text-right px-2 py-2 num font-medium text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                            {fmt(totalExpense)}
+                          </td>
+                          <td className="text-right px-2 py-2 num font-medium" style={{ background: "#f5fbef", color: "var(--green)", fontSize: "14px" }}>
+                            {fmt(totalTaxable)}
+                          </td>
+                        </tr>
+                      </>
+                    );
+                  })()}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+              ⓘ <b>所得總額</b> 會自動計入 ① 各成員所得 → 綜合所得總額。對照申報書的「租賃所得」明細表,合計數應一致。
+              若不一致,請檢查:1) 合約租期是否完全落在 {year} 年度 2) 月租金是否正確 3) 是否漏建合約。
+            </div>
+          </div>
+
           <div className="p-3 space-y-2">
             {(() => {
               if (householdProperties.length === 0) {
@@ -6086,7 +6226,7 @@ function TaxMethodsPanel({ result, filing, onChange }) {
 function CombinedIncomeCell({ entriesValue, manualValue, onChangeManual, width }) {
   const [editing, setEditing] = React.useState(false);
   const hasEntries = (entriesValue || 0) > 0;
-  // 邏輯一致性: entries 有資料 → 用 entries (覆蓋單格);沒有 → 用單格
+  // 邏輯: entries 有資料 → 計算用 entries (manualValue 可繼續編輯但不參與計算);沒有 → 計算用 manualValue
   const effectiveValue = hasEntries ? (entriesValue || 0) : (manualValue || 0);
   const widthCls = width || "w-24";
 
@@ -6096,7 +6236,7 @@ function CombinedIncomeCell({ entriesValue, manualValue, onChangeManual, width }
         <button
           className="w-full text-right num font-medium hover:bg-gray-50 rounded px-2 py-1"
           onClick={() => setEditing(true)}
-          title={hasEntries ? "已從逐筆明細自動計算,點擊查看" : "點擊以填入"}
+          title={hasEntries ? "計算採用逐筆明細;點擊也可手動修改單格" : "點擊填入"}
           style={{
             borderBottom: "1px dashed transparent",
             color: hasEntries ? "var(--green)" : "inherit",
@@ -6108,43 +6248,29 @@ function CombinedIncomeCell({ entriesValue, manualValue, onChangeManual, width }
         </button>
         {hasEntries && (
           <div className="text-[10px]" style={{ color: "var(--green)" }}>
-            📑 來自逐筆 (單格鎖住)
-          </div>
-        )}
-        {!hasEntries && manualValue > 0 && (
-          <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
-            單格填入
+            📑 來自逐筆 {manualValue > 0 ? `· 單格 ${fmt(manualValue)} 未採用` : ""}
           </div>
         )}
       </div>
     );
   }
 
-  // 展開狀態
   return (
     <div className={`${widthCls} inline-block`}>
-      {hasEntries ? (
-        <>
-          <div className="text-[10px] mb-0.5 text-left" style={{ color: "var(--green)" }}>
-            📑 來自逐筆明細:{fmt(entriesValue)}
-          </div>
-          <div className="text-[10px] mb-0.5 text-left" style={{ color: "var(--ink-mute)" }}>
-            (單格輸入已鎖住,因 entries 優先)
-          </div>
-          {manualValue > 0 && (
-            <div className="text-[10px] text-left p-1 rounded mb-0.5" style={{ background: "#fef9ec", color: "var(--gold)" }}>
-              ⚠ 單格還有 {fmt(manualValue)} 殘留,計算時不採用。
-              <button className="ml-1 underline" onClick={() => onChangeManual(0)}>清除</button>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          <div className="text-[10px] mb-0.5 text-left" style={{ color: "var(--ink-mute)" }}>
-            手動填入 (逐筆明細無此項所得):
-          </div>
-          <SumInput value={manualValue} onChange={onChangeManual} />
-        </>
+      {hasEntries && (
+        <div className="text-[10px] mb-0.5 text-left p-1 rounded" style={{ background: "#f5fbef", color: "var(--green)" }}>
+          📑 逐筆明細:{fmt(entriesValue)} (計算採用此值)
+        </div>
+      )}
+      <div className="text-[10px] mb-0.5 text-left" style={{ color: "var(--ink-mute)" }}>
+        {hasEntries ? "單格(備用,計算不採用):" : "單格輸入:"}
+      </div>
+      <SumInput value={manualValue} onChange={onChangeManual} />
+      {hasEntries && manualValue > 0 && (
+        <div className="text-[10px] mt-1 text-left" style={{ color: "var(--gold)" }}>
+          ⚠ 若想改用單格,請先清空逐筆明細
+          <button className="ml-1 underline" onClick={() => onChangeManual(0)}>清單格</button>
+        </div>
       )}
       <div className="flex items-center justify-end mt-0.5">
         <button className="text-[10px] hover:underline" onClick={() => setEditing(false)} style={{ color: "var(--ink-mute)" }}>
