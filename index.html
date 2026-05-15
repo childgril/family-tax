@@ -1097,6 +1097,74 @@ function computeTaxForFiling(filing, members, year) {
     if (m.needsLongTermCare) longTermCareCount++;
   });
 
+  // === 套用「申報書對照表」的申報應稅手動覆寫 ===
+  // declaredTaxableOverrides 的 key 格式:
+  //   c_${contractId}_${year}  — 合約級
+  //   m_${propertyId}_${year}_${idx}  — 手動補列
+  //   n_${propertyId}_${year}  — 沒合約物件 (使用者手動填申報應稅)
+  // 邏輯:override 值「取代」系統算出來的 taxable
+  const dtOverrides = filing.declaredTaxableOverrides || {};
+  if (Object.keys(dtOverrides).length > 0) {
+    // 為了套覆寫,需要重新逐物件 / 逐合約算系統值,然後替換
+    let overrideAdjust = 0;  // 累計覆寫造成的差額 (覆寫值 - 系統算值)
+    const filerIds = new Set([filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean));
+    (filing.properties || []).filter(p => filerIds.has(p.ownerId)).forEach(p => {
+      const overrideKey = `${p.id}_${filing.year}`;
+      const propOverride = (filing.manualRentOverrides || {})[overrideKey] || {};
+      const isIncluded = propOverride.includeInFiling === true;
+      const isLand = p.assetType === "land";
+
+      // helper:用 taxable 算式 (跟對照表 calcTaxable 一致)
+      const calcTaxableFor = (annualValue, isPub) => {
+        const comp = {
+          type: isPub ? "public" : (isLand ? "land" : "general"),
+          monthlyRent: 0, months: 12,
+          annualRentDirect: annualValue,
+          landTax: toNum(p.landTax || 0),
+          expenseRatio: 0.43,
+        };
+        return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
+      };
+
+      const agg = aggregateContractsForYear(filing.contracts, p.id, filing.year, filing.manualRentOverrides);
+
+      if (agg.anyContractInYear && agg.contracts.length > 0) {
+        // 逐合約檢查 override
+        agg.contracts.filter(c => c.months > 0).forEach(c => {
+          const auditKey = `c_${c.contractId}_${filing.year}`;
+          const ov = dtOverrides[auditKey];
+          if (ov === undefined || ov === null || ov === "") return;
+          const overrideVal = toNum(ov);
+          // 系統算的 = 用 appliedRent 算 (這跟 r.taxable 的計算一致)
+          const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+          const sysTaxable = isIncluded ? calcTaxableFor(appliedAnnual, c.isPublic) : 0;
+          overrideAdjust += (overrideVal - sysTaxable);
+        });
+      } else {
+        // 沒合約 → 用 n_ key
+        const auditKey = `n_${p.id}_${filing.year}`;
+        const ov = dtOverrides[auditKey];
+        if (ov === undefined || ov === null || ov === "") return;
+        const overrideVal = toNum(ov);
+        // 系統算的:這物件本身沒合約所以系統算 = 0
+        const sysTaxable = 0;
+        overrideAdjust += (overrideVal - sysTaxable);
+      }
+      // m_ 格式 (手動補列) 需要 idx,複雜些。getComputablesForProperty 會回傳 computables 陣列。
+      const computables = getComputablesForProperty(p, filing.year, filing.contracts, filing.rentalRecords || [], filing.manualRentOverrides);
+      computables.forEach((comp, idx) => {
+        const auditKey = `m_${p.id}_${filing.year}_${idx}`;
+        const ov = dtOverrides[auditKey];
+        if (ov === undefined || ov === null || ov === "") return;
+        const overrideVal = toNum(ov);
+        const annual = comp.annualRentDirect || (comp.monthlyRent * comp.months) || 0;
+        const sysTaxable = isIncluded ? (computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0) : 0;
+        overrideAdjust += (overrideVal - sysTaxable);
+      });
+    });
+    rentalTaxable += overrideAdjust;
+  }
+
   const grossIncome = salaryGross + interest + dividend + rentalTaxable + otherIncome;
 
   // === 2. 免稅額 (按關係判定) ===
