@@ -4594,7 +4594,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               <span className="text-xs" style={{ color: "var(--ink-mute)", minWidth: "12px" }}>
                 {rentalSectionCollapsed ? "▶" : "▼"}
               </span>
-              <div className="ornament">⑥ RENTAL RECORDS · 本戶 {year} 年度租賃紀錄</div>
+              <div>
+                <div className="ornament" style={{ color: "var(--accent-deep)" }}>RENTAL RECORDS</div>
+                <div className="font-serif text-base">🏠 {year} 年租賃紀錄</div>
+              </div>
             </div>
             <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
               <button
@@ -4646,20 +4649,21 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-xs" style={{ minWidth: "600px" }}>
+              <table className="w-full text-xs" style={{ minWidth: "780px" }}>
                 <thead>
                   <tr style={{ background: "white", borderBottom: "2px solid var(--ink-soft)" }}>
                     <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>地址</th>
-                    <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
                     <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>歸戶</th>
-                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>申報租金<br/><span className="text-[9px]">(年度收入)</span></th>
-                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>必要費用<br/><span className="text-[9px]">(43% 或地價稅)</span></th>
-                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px", background: "#f5fbef" }}>所得總額<br/><span className="text-[9px]">(計入綜所)</span></th>
+                    <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>實際租金<br/><span className="text-[9px]">(合約原值)</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>申報租金<br/><span className="text-[9px]">(實際採用)</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>實際應稅<br/><span className="text-[9px]">/地價稅</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px", background: "#f5fbef" }}>申報應稅<br/><span className="text-[9px]">(計入綜所)</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {(() => {
-                    // 對每個物件 + 每份合約,列出「地址 / 申報租金 / 所得總額」
+                    // 列出全部物件 (不限是否勾選),依規則顯示三組數字
                     const rows = [];
                     householdProperties.forEach(p => {
                       const agg = aggregateContractsForYear(contracts, p.id, year, filing.manualRentOverrides);
@@ -4667,76 +4671,86 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       const ownerName = owner ? owner.name : "—";
                       const isLand = p.assetType === "land";
 
-                      // 檢查使用者是否勾選「計入申報」(預設 false,需主動勾選才計入)
                       const overrideKey = `${p.id}_${year}`;
                       const override = (filing.manualRentOverrides || {})[overrideKey];
                       const isIncluded = override?.includeInFiling === true;
-                      if (!isIncluded) return;  // 未勾選計入 → 不顯示在對照表
 
-                      // 取得實際計入綜所的 computables
-                      const computables = getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides);
+                      // 計算「實際應稅」用的 helper (用合約原值 c.rent)
+                      const calcTaxable = (annualValue, isPub) => {
+                        const comp = {
+                          type: isPub ? "public" : (isLand ? "land" : "general"),
+                          monthlyRent: 0, months: 12,
+                          annualRentDirect: annualValue,
+                          landTax: toNum(p.landTax || 0),
+                          expenseRatio: 0.43,
+                        };
+                        return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
+                      };
 
                       if (agg.anyContractInYear && agg.contracts.length > 0) {
-                        // 有合約 → 逐合約列出
                         agg.contracts.filter(c => c.months > 0).forEach(c => {
-                          const annual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
-                          const comp = {
-                            type: c.isPublic ? "public" : (isLand ? "land" : "general"),
-                            monthlyRent: c.monthly,
-                            months: c.months,
-                            annualRentDirect: annual,
-                            landTax: toNum(p.landTax || 0),
-                            expenseRatio: 0.43,
-                          };
-                          const breakdown = computeRentalIncome([comp], params).breakdown[0];
-                          const taxable = breakdown?.taxableIncome || 0;
-                          const expense = annual - taxable;
-                          const typeLabel = c.isPublic ? "公益" : (isLand ? "土地" : "一般");
-                          const typeColor = c.isPublic ? "var(--green)" : (isLand ? "var(--gold)" : "var(--ink-soft)");
+                          const actualAnnual = c.rent;  // 合約原值 (沒手動調整)
+                          const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;  // 採用值 (可能被手動調整)
+                          const actualTaxable = calcTaxable(actualAnnual, c.isPublic);  // 用實際租金算
+                          const appliedTaxable = calcTaxable(appliedAnnual, c.isPublic);  // 用申報租金算
+
+                          // 規則:
+                          // 未勾選 → 申報租金=0, 申報應稅=0;實際租金/實際應稅照算
+                          // 已勾選 → 申報租金=appliedAnnual, 申報應稅=appliedTaxable
+                          const declaredRent = isIncluded ? appliedAnnual : 0;
+                          const declaredTaxable = isIncluded ? appliedTaxable : 0;
+
                           rows.push({
-                            propertySerial: p.serial || "",
-                            propertyName: p.name || "",
-                            address: p.address || "",
+                            address: p.address || p.name || "",
                             tenant: c.tenantName,
                             period: c.period,
-                            months: c.months,
                             ownerName,
-                            typeLabel,
-                            typeColor,
-                            annual,
-                            expense,
-                            taxable,
+                            typeLabel: c.isPublic ? "公益" : (isLand ? "土地" : "一般"),
+                            typeColor: c.isPublic ? "var(--green)" : (isLand ? "var(--gold)" : "var(--ink-soft)"),
+                            isIncluded,
                             isAdjusted: c.isAdjusted,
+                            actualAnnual, declaredRent,
+                            actualTaxable, declaredTaxable,
+                          });
+                        });
+                      } else {
+                        // 沒合約 → 只有勾選且有 rentalRecords/手動補列才顯示
+                        const computables = getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides);
+                        if (computables.length > 0) {
+                          computables.forEach(comp => {
+                            const annual = comp.annualRentDirect || (comp.monthlyRent * comp.months) || 0;
+                            if (annual === 0) return;
+                            const taxable = computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
+                            rows.push({
+                              address: p.address || p.name || "",
+                              tenant: comp.note || "手動輸入",
+                              period: `${comp.months} 個月`,
+                              ownerName,
+                              typeLabel: comp.type === "public" ? "公益" : (comp.type === "land" ? "土地" : "一般"),
+                              typeColor: comp.type === "public" ? "var(--green)" : (comp.type === "land" ? "var(--gold)" : "var(--ink-soft)"),
+                              isIncluded,
+                              isAdjusted: false,
+                              actualAnnual: annual, declaredRent: isIncluded ? annual : 0,
+                              actualTaxable: taxable, declaredTaxable: isIncluded ? taxable : 0,
+                              isManualOnly: true,
+                            });
+                          });
+                        } else {
+                          // 完全沒合約沒手動 → 仍列出空行,讓使用者知道這個物件存在
+                          rows.push({
+                            address: p.address || p.name || "",
+                            tenant: "—",
+                            period: "本年度無合約",
+                            ownerName,
+                            typeLabel: isLand ? "土地" : "—",
+                            typeColor: "var(--ink-mute)",
+                            isIncluded,
+                            isAdjusted: false,
+                            actualAnnual: 0, declaredRent: 0,
+                            actualTaxable: 0, declaredTaxable: 0,
                             isManualOnly: false,
                           });
-                        });
-                      } else if (computables.length > 0) {
-                        // 沒合約但有 computables (來自 rentalRecords 或舊版手動覆寫) → 列出
-                        computables.forEach(comp => {
-                          const annual = comp.annualRentDirect || (comp.monthlyRent * comp.months) || 0;
-                          if (annual === 0) return;
-                          const breakdown = computeRentalIncome([comp], params).breakdown[0];
-                          const taxable = breakdown?.taxableIncome || 0;
-                          const expense = annual - taxable;
-                          const typeLabel = comp.type === "public" ? "公益" : (comp.type === "land" ? "土地" : "一般");
-                          const typeColor = comp.type === "public" ? "var(--green)" : (comp.type === "land" ? "var(--gold)" : "var(--ink-soft)");
-                          rows.push({
-                            propertySerial: p.serial || "",
-                            propertyName: p.name || "",
-                            address: p.address || "",
-                            tenant: comp.note || "手動輸入",
-                            period: `${comp.months} 個月`,
-                            months: comp.months,
-                            ownerName,
-                            typeLabel,
-                            typeColor,
-                            annual,
-                            expense,
-                            taxable,
-                            isAdjusted: false,
-                            isManualOnly: true,
-                          });
-                        });
+                        }
                       }
                     });
 
@@ -4744,57 +4758,76 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       return (
                         <tr>
                           <td colSpan={7} className="text-center py-4 text-xs" style={{ color: "var(--ink-mute)" }}>
-                            本年度尚無有效租賃合約
+                            本年度尚無租賃物件
                           </td>
                         </tr>
                       );
                     }
 
-                    // 合計
-                    const totalAnnual = rows.reduce((s, r) => s + r.annual, 0);
-                    const totalExpense = rows.reduce((s, r) => s + r.expense, 0);
-                    const totalTaxable = rows.reduce((s, r) => s + r.taxable, 0);
+                    const totalActualAnnual = rows.reduce((s, r) => s + r.actualAnnual, 0);
+                    const totalDeclaredRent = rows.reduce((s, r) => s + r.declaredRent, 0);
+                    const totalActualTaxable = rows.reduce((s, r) => s + r.actualTaxable, 0);
+                    const totalDeclaredTaxable = rows.reduce((s, r) => s + r.declaredTaxable, 0);
 
                     return (
                       <>
                         {rows.map((r, i) => (
-                          <tr key={i} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                          <tr key={i} style={{
+                            borderBottom: "1px solid var(--line-soft)",
+                            opacity: r.isIncluded ? 1 : 0.55,
+                          }}>
                             <td className="px-2 py-1.5">
-                              <div className="text-xs">{r.address || r.propertyName}</div>
+                              <div className="text-xs">
+                                {r.isIncluded && <span style={{ color: "var(--green)" }}>✓ </span>}
+                                {r.address}
+                              </div>
                               <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>
                                 {r.tenant} · {r.period}
                                 {r.isAdjusted && <span className="ml-1" style={{ color: "var(--gold)" }}>(手動)</span>}
-                                {r.isManualOnly && <span className="ml-1" style={{ color: "var(--gold)" }}>(無合約·手動)</span>}
+                                {r.isManualOnly && <span className="ml-1" style={{ color: "var(--gold)" }}>(無合約)</span>}
                               </div>
-                            </td>
-                            <td className="text-center px-2 py-1.5">
-                              <span className="text-[10px]" style={{ color: r.typeColor }}>{r.typeLabel}</span>
                             </td>
                             <td className="text-center px-2 py-1.5 text-[10px]" style={{ color: "var(--ink-mute)" }}>
                               {r.ownerName}
                             </td>
-                            <td className="text-right px-2 py-1.5 num">{fmt(r.annual)}</td>
-                            <td className="text-right px-2 py-1.5 num text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                              {fmt(r.expense)}
+                            <td className="text-center px-2 py-1.5">
+                              <span className="text-[10px]" style={{ color: r.typeColor }}>{r.typeLabel}</span>
                             </td>
-                            <td className="text-right px-2 py-1.5 num font-medium" style={{ background: "#f5fbef", color: "var(--accent-deep)" }}>
-                              {fmt(r.taxable)}
+                            <td className="text-right px-2 py-1.5 num">{fmt(r.actualAnnual)}</td>
+                            <td className="text-right px-2 py-1.5 num" style={{
+                              color: r.isIncluded ? "inherit" : "var(--ink-mute)",
+                            }}>
+                              {fmt(r.declaredRent)}
+                            </td>
+                            <td className="text-right px-2 py-1.5 num text-[11px]" style={{ color: "var(--ink-mute)" }}>
+                              {fmt(r.actualTaxable)}
+                            </td>
+                            <td className="text-right px-2 py-1.5 num font-medium" style={{
+                              background: "#f5fbef",
+                              color: r.isIncluded ? "var(--accent-deep)" : "var(--ink-mute)",
+                            }}>
+                              {fmt(r.declaredTaxable)}
                             </td>
                           </tr>
                         ))}
                         {/* 合計列 */}
                         <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
                           <td colSpan={3} className="text-right px-2 py-2 font-medium text-xs">
-                            合計({rows.length} 筆合約)
+                            合計({rows.length} 筆 · 計入 {rows.filter(r => r.isIncluded).length} 筆)
+                          </td>
+                          <td className="text-right px-2 py-2 num text-[11px]" style={{ color: "var(--ink-mute)" }}>
+                            {fmt(totalActualAnnual)}
                           </td>
                           <td className="text-right px-2 py-2 num font-medium">
-                            {fmt(totalAnnual)}
+                            {fmt(totalDeclaredRent)}
                           </td>
-                          <td className="text-right px-2 py-2 num font-medium text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                            {fmt(totalExpense)}
+                          <td className="text-right px-2 py-2 num text-[11px]" style={{ color: "var(--ink-mute)" }}>
+                            {fmt(totalActualTaxable)}
                           </td>
-                          <td className="text-right px-2 py-2 num font-medium" style={{ background: "#f5fbef", color: "var(--green)", fontSize: "14px" }}>
-                            {fmt(totalTaxable)}
+                          <td className="text-right px-2 py-2 num font-medium" style={{
+                            background: "#f5fbef", color: "var(--green)", fontSize: "15px",
+                          }}>
+                            {fmt(totalDeclaredTaxable)}
                           </td>
                         </tr>
                       </>
@@ -5074,9 +5107,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                                     <input
                                       type="text"
                                       inputMode="numeric"
-                                      className="input-text-plain text-xs w-20 text-right"
+                                      className="input-text-plain text-xs w-20 text-right placeholder:text-[9px] placeholder:text-gray-400"
                                       value={c.manualRent !== null && c.manualRent !== undefined ? c.manualRent : ""}
-                                      placeholder="留空 = 原值"
+                                      placeholder="原值"
+                                      title="留空 = 採用合約原值;填數字 = 改用此數字"
                                       onChange={e => {
                                         // 只允許數字 + 負號
                                         const val = e.target.value.replace(/[^\d-]/g, "");
