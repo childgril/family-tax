@@ -4699,6 +4699,47 @@ function FilingPage({ data, setData, year, setPage }) {
     // 用第一位成員當預設主納稅人
     const taxpayer = data.members[0];
     const taxpayerName = taxpayer?.name || "";
+
+    // === 自動帶出去年「補繳新增」的所得 entries + 物件補繳標記 ===
+    // 規則:找前一年同主納稅人的 filing,把標記 supplementOriginYear 或剛是去年新增的 entries 帶過來
+    let carriedIncomeEntries = [];
+    let carriedAdjustmentsHint = [];  // 提醒使用者去年的 adjustment 也許要參考
+    if (taxpayer) {
+      const prevYear = year - 1;
+      const prevFiling = data.filings.find(f =>
+        f.year === prevYear &&
+        (f.taxpayerId === taxpayer.id || f.spouseId === taxpayer.id)
+      );
+      if (prevFiling) {
+        // 1. 上一年的所有 entries 中,標記為 supplement (有 supplementOriginYear) 的全部帶過來
+        //    + 上一年 ⑦ 區的 adjustments 是 supplement_income / supplement_rental 的,也視為「該年補繳」
+        const prevEntries = prevFiling.incomeEntries || [];
+        carriedIncomeEntries = prevEntries
+          .filter(e => e.supplementOriginYear)  // 只帶「補繳新增」標記的
+          .map(e => ({
+            ...e,
+            id: uid(),  // 新 id
+            // supplementOriginYear 保留 (顯示來源年)
+          }));
+
+        // 2. 上一年 adjustments 中,supplement_income / supplement_rental 也視為「下一年要再注意一下」
+        //    → 自動建一筆 entry 標記為「來自 prevYear 補繳通知,可移除」
+        (prevFiling.adjustments || []).forEach(adj => {
+          if (adj.type === "supplement_income" || adj.type === "supplement_rental") {
+            // 沒有具體所得資料時,就不自動建 entry (避免空 entry 困擾)
+            // 改成放入 carriedAdjustmentsHint 給使用者參考
+            carriedAdjustmentsHint.push({
+              year: prevYear,
+              type: adj.type,
+              reason: adj.reason || "",
+              docNo: adj.docNo || "",
+              amount: adj.amount || 0,
+            });
+          }
+        });
+      }
+    }
+
     const newFiling = {
       id: uid(),
       year,
@@ -4707,6 +4748,8 @@ function FilingPage({ data, setData, year, setPage }) {
       spouseId: "",
       dependentIds: [],
       memberIncome: {},
+      incomeEntries: carriedIncomeEntries,  // 帶入上一年補繳的 entries
+      carriedAdjustmentsHint,  // 上一年補繳通知提示 (UI 顯示一個黃色卡片)
       itemizedDeductions: {
         donationGeneral: 0, donationUnlimited: 0,
         insurancePersonal: 0, insuranceHealth: 0,
@@ -4900,11 +4943,27 @@ function FilingPage({ data, setData, year, setPage }) {
 }
 
 function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, allFilings, payerDirectory, savePayer, year, onChange: rawOnChange, onDelete }) {
-  // 鎖定時攔截所有 onChange,只允許「解鎖」操作通過 (locked: false)
+  // 鎖定機制 — 兩段式:
+  //   filing.locked = 鎖前 6 個區塊 + 申報書 (避免誤改「第一次申報」資料)
+  //   filing.settlementLocked = 額外鎖 ⑦ 實際結算與補繳通知 (補繳完成後也封存)
+  // 第一段鎖定時,仍允許編輯 actualSettlement / adjustments (補繳通知區)
+  // 兩段都鎖時,什麼都改不了
+
+  // 只比較會影響「申報內容」的欄位 — actualSettlement / adjustments 是「結算後紀錄」不算
+  const isSettlementOnlyChange = (next) => {
+    const keys = Object.keys(next).filter(k => next[k] !== filing[k]);
+    if (keys.length === 0) return true;  // 沒變化
+    return keys.every(k => k === "actualSettlement" || k === "adjustments");
+  };
+
   const onChange = (next) => {
-    if (filing.locked && next.locked !== false) {
-      // 鎖定中且不是解鎖動作 → 忽略
-      return;
+    // 補繳區的鎖
+    if (filing.settlementLocked && isSettlementOnlyChange(next) && next.settlementLocked !== false) {
+      return;  // 補繳區鎖定中且試圖改補繳區 → 攔下
+    }
+    // 申報區的鎖
+    if (filing.locked && next.locked !== false && !isSettlementOnlyChange(next)) {
+      return;  // 申報區鎖定中且試圖改申報區 → 攔下
     }
     rawOnChange(next);
   };
@@ -5102,7 +5161,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         <div className="flex items-center gap-3 mb-3">
           {filing.locked && (
             <span className="chip text-xs" style={{ background: "var(--gold)", color: "white", padding: "4px 10px" }}>
-              🔒 已鎖定
+              🔒 申報已鎖定
             </span>
           )}
           <input
@@ -5114,7 +5173,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             }}
             value={filing.name}
             readOnly={filing.locked}
-            onChange={e => filing.locked ? null : onChange({ ...filing, name: e.target.value })}
+            onChange={e => filing.locked ? null : rawOnChange({ ...filing, name: e.target.value })}
           />
           <button
             className="text-sm px-3 py-2 rounded"
@@ -5124,19 +5183,20 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               border: `1px solid var(--gold)`,
               fontWeight: 600,
             }}
+            title={filing.locked ? "解鎖以重新編輯申報內容" : "鎖定第一次申報內容,避免誤改(⑦ 後續調整區仍可繼續使用)"}
             onClick={() => {
               if (filing.locked) {
-                if (window.confirm("⚠ 解鎖後可繼續編輯此申報戶資料。確定要解鎖嗎?")) {
-                  onChange({ ...filing, locked: false });
+                if (window.confirm("⚠ 解鎖後可繼續編輯前 6 個區塊的申報資料。確定要解鎖嗎?")) {
+                  rawOnChange({ ...filing, locked: false });
                 }
               } else {
-                if (window.confirm("🔒 鎖定後此申報戶資料將無法編輯 (避免誤改)。確定要鎖定嗎?")) {
-                  onChange({ ...filing, locked: true });
+                if (window.confirm("🔒 鎖定後,前 6 個區塊 (所得/租賃/扣除/抵減/計稅) 將無法編輯。\n⑦ 實際結算與後續調整 區塊仍可繼續使用。\n\n確定要鎖定嗎?")) {
+                  rawOnChange({ ...filing, locked: true });
                 }
               }
             }}
           >
-            {filing.locked ? "🔓 解鎖" : "🔒 完成 · 鎖定"}
+            {filing.locked ? "🔓 解鎖申報" : "🔒 完成申報 · 鎖定"}
           </button>
           {!filing.locked && (
             <button className="btn-danger text-sm" onClick={onDelete}>刪除此申報戶</button>
@@ -5241,7 +5301,78 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         </div>
       )}
 
+      {/* === 上一年補繳通知提醒卡 (carriedAdjustmentsHint) === */}
+      {(filing.carriedAdjustmentsHint || []).length > 0 && (
+        <div className="p-3 rounded" style={{ background: "#fffbeb", border: "1px solid var(--gold)" }}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-medium" style={{ color: "var(--gold)" }}>
+              ⚠ 去年補繳通知提醒 ({(filing.carriedAdjustmentsHint || []).length} 筆)
+            </div>
+            <button
+              className="text-[10px] hover:underline"
+              style={{ color: "var(--ink-mute)" }}
+              title="如果這些項目今年確定沒有了,可以全部關閉"
+              onClick={() => {
+                if (window.confirm("確定關閉所有去年補繳提醒?關閉後不再顯示。")) {
+                  onChange({ ...filing, carriedAdjustmentsHint: [] });
+                }
+              }}
+            >
+              全部關閉 ×
+            </button>
+          </div>
+          <div className="text-[10px] mb-2" style={{ color: "var(--ink-soft)" }}>
+            去年的 ⑦ 區補繳通知有以下項目,請確認今年是否也有相同所得/租金 (若有,記得在下方對應區塊補列):
+          </div>
+          <div className="space-y-1">
+            {(filing.carriedAdjustmentsHint || []).map((h, idx) => (
+              <div key={idx} className="flex items-center gap-2 p-2 rounded text-xs" style={{ background: "white", border: "1px dashed var(--gold)" }}>
+                <span className="chip chip-amber text-[10px]">
+                  {h.type === "supplement_rental" ? "去年補繳·新增租金" : "去年補繳·新增所得"}
+                </span>
+                <span className="flex-1" style={{ color: "var(--ink)" }}>
+                  {h.reason || "(未填原因)"}
+                  {h.docNo && <span className="ml-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>· 公文 {h.docNo}</span>}
+                </span>
+                <span className="num text-[11px]" style={{ color: "var(--gold)" }}>
+                  補繳 {fmt(h.amount)}
+                </span>
+                <button
+                  className="text-[10px] hover:underline"
+                  style={{ color: "var(--accent)" }}
+                  onClick={() => {
+                    // 跳到 ① 或 ②
+                    const targetId = h.type === "supplement_rental" ? "section-rental" : "section-income";
+                    const el = document.getElementById(targetId);
+                    if (el) {
+                      el.scrollIntoView({ behavior: "smooth", block: "start" });
+                      const det = el.querySelector("details");
+                      if (det && !det.open) det.open = true;
+                    }
+                  }}
+                  title={h.type === "supplement_rental" ? "跳到 ② 租賃紀錄補列" : "跳到 ① 所得明細補列"}
+                >
+                  → 跳到 {h.type === "supplement_rental" ? "②" : "①"}
+                </button>
+                <button
+                  className="text-[10px]"
+                  style={{ color: "var(--ink-mute)" }}
+                  title="今年沒有這筆,關閉提示"
+                  onClick={() => {
+                    const next = (filing.carriedAdjustmentsHint || []).filter((_, i) => i !== idx);
+                    onChange({ ...filing, carriedAdjustmentsHint: next });
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 逐筆所得明細 (依官方申報書格式) */}
+      <div id="section-income">
       <IncomeEntriesTable
         entries={incomeEntries}
         members={result.filers}
@@ -5251,10 +5382,11 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         payerDirectory={payerDirectory}
         savePayer={savePayer}
       />
+      </div>
 
       {/* 本戶租賃 — 合約自動攤分,每物件可展開查看與手動覆寫 */}
       {householdProperties.length > 0 && (
-        <div className="card">
+        <div className="card" id="section-rental">
           <div
             className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
             style={{ borderBottom: rentalSectionCollapsed ? "none" : "1px solid var(--line)" }}
@@ -6713,7 +6845,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
       <OfficialFormView result={result} year={year} filing={filing} onChange={onChange} />
 
       {/* ⑤ 實際結算與後續調整 */}
-      <SettlementPanel filing={filing} onChange={onChange} systemFinalDue={result.finalDue} />
+      <SettlementPanel filing={filing} onChange={onChange} rawOnChange={rawOnChange} systemFinalDue={result.finalDue} properties={householdProperties} members={members} />
 
 
       {/* 新增物件 Modal */}
@@ -7090,16 +7222,21 @@ function OfficialAuditPanel({ filing, entries, onChange }) {
   );
 }
 
-function SettlementPanel({ filing, onChange, systemFinalDue }) {
+function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, properties, members }) {
   const settlement = filing.actualSettlement || {};
   const adjustments = filing.adjustments || [];
   const ADJ_TYPES = {
-    "supplement": { label: "補繳稅額", chip: "chip-amber", desc: "國稅局查到漏報或補正,需補繳" },
+    "supplement_income": { label: "補繳·新增所得", chip: "chip-amber", desc: "國稅局查到未申報的所得(薪資/利息/股利/執行業務等),補繳之" },
+    "supplement_rental": { label: "補繳·新增租金", chip: "chip-amber", desc: "國稅局針對特定物件追補租賃所得" },
+    "supplement": { label: "補繳·一般", chip: "chip-amber", desc: "其他補繳原因(扣除額爭議、計算更正等)" },
     "refund_received": { label: "實收退稅", chip: "chip-green", desc: "實際收到的退稅金額" },
     "penalty": { label: "罰鍰", chip: "chip-red", desc: "漏報罰" },
     "interest": { label: "利息", chip: "chip-amber", desc: "滯納利息" },
     "other": { label: "其他", chip: "chip", desc: "" },
   };
+  // 是否為「新增所得/新增租金」類型 (需要記錄詳細的金額/物件對應)
+  const isIncomeType = (t) => t === "supplement_income" || t === "supplement_rental";
+
   const updateSettlement = (patch) => {
     onChange({ ...filing, actualSettlement: { ...settlement, ...patch } });
   };
@@ -7114,6 +7251,14 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
       docUrl: "",       // 國稅局電子公文連結
       station: "",      // 承辦站號/分局/承辦人
       note: "",
+      // 「新增所得 / 新增租金」相關欄位:
+      adjGrossIncome: 0,        // 補列的所得金額 (給付總額)
+      adjIncomeCategory: "",    // 所得類別 (salary/interest/dividend/rental/other 等)
+      adjIncomeCode: "",        // 格式代號 (50 / 5A / 9B 等)
+      adjPropertyId: "",        // 若為新增租金,對應的物件 id
+      adjOwnerId: "",           // 歸戶到誰
+      adjSource: "",            // 扣繳單位 (薪資/利息) 或 承租人 (租金)
+      adjTaxId: "",             // 統編
       ...preset,
     };
     onChange({ ...filing, adjustments: [...adjustments, adj] });
@@ -7142,7 +7287,11 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
   const [collapsed, setCollapsed] = React.useState(false);
 
   return (
-    <div className="card">
+    <div className="card" style={{
+      background: filing.settlementLocked ? "#f5f3ec" : "white",
+      borderColor: filing.settlementLocked ? "var(--gold)" : "var(--line)",
+      borderWidth: filing.settlementLocked ? "2px" : "1px",
+    }}>
       <div
         className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
         style={{ borderBottom: collapsed ? "none" : "1px solid var(--line)" }}
@@ -7153,9 +7302,41 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
             {collapsed ? "▶" : "▼"}
           </span>
           <div className="ornament">⑦ SETTLEMENT · 實際結算與後續調整</div>
+          {filing.settlementLocked && (
+            <span className="chip text-[10px] ml-2" style={{ background: "var(--gold)", color: "white", padding: "2px 8px" }}>
+              🔒 補繳已鎖定
+            </span>
+          )}
         </div>
-        <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-          記錄實際繳/退金額(可能與系統試算差幾元四捨五入)+ 後續補繳/罰金
+        <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+          <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+            記錄實際繳/退 + 後續補繳通知
+          </div>
+          <button
+            className="text-xs px-2 py-1 rounded"
+            style={{
+              background: filing.settlementLocked ? "white" : "transparent",
+              color: "var(--gold)",
+              border: `1px solid var(--gold)`,
+            }}
+            title={filing.settlementLocked
+              ? "解鎖以重新編輯補繳/結算資料"
+              : "鎖定後 ⑦ 區所有欄位將無法編輯 (適用於補繳完成、不再變動時)"}
+            onClick={() => {
+              if (filing.settlementLocked) {
+                if (window.confirm("⚠ 解鎖後可繼續編輯 ⑦ 區的補繳/結算紀錄。確定要解鎖嗎?")) {
+                  // 解鎖補繳區不受任何鎖影響 → 用 rawOnChange 繞過
+                  (rawOnChange || onChange)({ ...filing, settlementLocked: false });
+                }
+              } else {
+                if (window.confirm("🔒 鎖定 ⑦ 區後,實際結算 + 補繳紀錄將無法編輯。\n適用於本年度的補繳/退稅都已完成、不再變動的情況。\n\n確定要鎖定嗎?")) {
+                  onChange({ ...filing, settlementLocked: true });
+                }
+              }
+            }}
+          >
+            {filing.settlementLocked ? "🔓 解鎖 ⑦" : "🔒 鎖定 ⑦"}
+          </button>
         </div>
       </div>
       {!collapsed && (
@@ -7214,9 +7395,15 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
                 </span>
               )}
             </div>
-            <div className="flex gap-1">
+            <div className="flex gap-1 flex-wrap">
+              <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "supplement_income" })} title="國稅局查到漏報所得,需追加">
+                + 新增所得
+              </button>
+              <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "supplement_rental" })} title="國稅局針對特定物件追補租賃">
+                + 新增租金
+              </button>
               <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "supplement" })}>
-                + 補繳
+                + 一般補繳
               </button>
               <button className="btn-secondary text-[10px]" onClick={() => addAdjustment({ type: "refund_received" })}>
                 + 實收退稅
@@ -7239,12 +7426,13 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
               {adjustments.map(a => {
                 const t = ADJ_TYPES[a.type] || ADJ_TYPES.other;
                 const amtColor = a.type === "refund_received" ? "var(--green)" : "var(--accent-deep)";
+                const showIncomeBlock = isIncomeType(a.type);
                 return (
                   <div key={a.id} className="p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
                     {/* 第一列: 類型 / 日期 / 金額 / 刪除 */}
                     <div className="flex items-center gap-2 mb-2">
                       <select className="input-text-plain text-xs"
-                        style={{ minWidth: "100px" }}
+                        style={{ minWidth: "140px" }}
                         value={a.type}
                         onChange={e => updateAdjustment(a.id, { type: e.target.value })}>
                         {Object.entries(ADJ_TYPES).map(([k, v]) => (
@@ -7258,7 +7446,7 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
                         placeholder="例: 112/8/15"
                         value={a.date || ""}
                         onChange={e => updateAdjustment(a.id, { date: e.target.value })} />
-                      <span className="text-[10px] ml-auto" style={{ color: "var(--ink-mute)" }}>金額:</span>
+                      <span className="text-[10px] ml-auto" style={{ color: "var(--ink-mute)" }}>補繳稅額:</span>
                       <input type="number"
                         className="input-text-plain text-xs text-right font-medium"
                         style={{ width: "120px", color: amtColor, fontSize: "14px" }}
@@ -7269,6 +7457,35 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
                         title="刪除此筆"
                         onClick={() => removeAdjustment(a.id)}>×</button>
                     </div>
+
+                    {/* === 新增所得 / 新增租金 的跳轉提示 === */}
+                    {showIncomeBlock && (
+                      <div className="p-2 rounded mb-2 flex items-center gap-3" style={{ background: "white", border: "1px dashed var(--gold)" }}>
+                        <div className="text-[10px] flex-1" style={{ color: "var(--ink-soft)" }}>
+                          {a.type === "supplement_rental"
+                            ? "📋 請到 ② 租賃紀錄輸入 補列被追補的物件租金 (勾選計入)"
+                            : "📋 請到 ① 所得明細逐筆輸入 新增一筆所得 (扣繳憑單上的資料)"}
+                          <span className="ml-2" style={{ color: "var(--gold)" }}>明年同個申報戶會自動帶出這筆</span>
+                        </div>
+                        <button
+                          className="btn-secondary text-[10px] px-2 py-1"
+                          onClick={() => {
+                            // 跳到對應區塊 (用 anchor scroll)
+                            const targetId = a.type === "supplement_rental" ? "section-rental" : "section-income";
+                            const el = document.getElementById(targetId);
+                            if (el) {
+                              el.scrollIntoView({ behavior: "smooth", block: "start" });
+                              // 找 details 並展開 (① 是 details / ② 是 collapsible card)
+                              const det = el.querySelector("details");
+                              if (det && !det.open) det.open = true;
+                            }
+                          }}
+                          title={a.type === "supplement_rental" ? "跳到 ② 租賃紀錄輸入" : "跳到 ① 所得明細逐筆輸入"}
+                        >
+                          → 跳到 {a.type === "supplement_rental" ? "②" : "①"}
+                        </button>
+                      </div>
+                    )}
 
                     {/* 第二列: 原因 */}
                     <div className="flex items-center gap-2 mb-1.5">
@@ -7625,8 +7842,16 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
     return found ? found[0] : null;
   };
   return (
-    <tr key={e.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+    <tr key={e.id} style={{
+      borderBottom: "1px solid var(--line-soft)",
+      background: e.supplementOriginYear ? "#fffbeb" : undefined,
+    }}>
       <td className="px-2 py-1">
+        {e.supplementOriginYear && (
+          <div className="text-[9px] mb-0.5" style={{ color: "var(--gold)" }} title={`來自 ${e.supplementOriginYear} 年補繳新增`}>
+            ⚠ 補繳新增 ({e.supplementOriginYear})
+          </div>
+        )}
         <select className="input-text-plain text-xs w-full" value={e.category}
           onChange={ev => onUpdate(e.id, { category: ev.target.value, code: CATEGORIES[ev.target.value]?.defaultCode || "" })}>
           {Object.entries(CATEGORIES).map(([k, c]) => (
