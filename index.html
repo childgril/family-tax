@@ -2371,6 +2371,52 @@ function Field({ label, hint, children }) {
 // 編輯時 (focus): 顯示原始算式 (例 "114360+171540");
 // 失焦後 (blur): 顯示計算結果 (例 285,900)
 // onChange 一律送出計算後的數字
+// 算式輸入 (持久化算式) — 給「給付/收入」用,讓使用者可看到自己打了什麼
+// entry 內存 grossExpr (原始算式) 跟 gross (加總值)
+function FormulaInput({ exprValue, value, onChange, placeholder = "可填算式 如 100+200" }) {
+  // 顯示原始算式 (有的話) 或加總值
+  const display = exprValue !== undefined && exprValue !== "" && exprValue !== null
+    ? exprValue
+    : (value ? String(value) : "");
+
+  const computed = evalExpr(display);
+  const isMultiTerm = /[+\-*/]/.test(String(display).replace(/^-/, ""));
+  const valid = Number.isFinite(computed);
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        inputMode="decimal"
+        className="input-text w-full text-right text-xs"
+        value={display}
+        placeholder={placeholder}
+        title="可以輸入算式,例如 180000+36000,系統會自動加總並保留算式"
+        onChange={e => {
+          const v = e.target.value;
+          const r = evalExpr(v);
+          // 同時更新算式 (持久) 與加總值 (計算用)
+          onChange({
+            expr: v,
+            value: Number.isFinite(r) ? Math.round(r) : 0,
+          });
+        }}
+      />
+      {/* 永遠顯示加總 (有多項時) */}
+      {isMultiTerm && valid && (
+        <div className="absolute right-1 -bottom-4 text-[10px] num" style={{ color: "var(--accent-deep)" }}>
+          = {Math.round(computed).toLocaleString("zh-TW")}
+        </div>
+      )}
+      {!valid && display && (
+        <div className="absolute right-1 -bottom-4 text-[10px]" style={{ color: "var(--gold)" }}>
+          算式錯誤
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SumInput({ value, onChange, className = "", placeholder = "0", title = "可輸入算式,例如 100+200+300" }) {
   const [expr, setExpr] = React.useState("");
   const [editing, setEditing] = React.useState(false);
@@ -6796,7 +6842,7 @@ function codeQualifiesFor85Credit(code) {
   const c = String(code).trim().toUpperCase();
   return c === "54" || c === "54C";
 }
-function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
+function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, groupByMember) {
   const cat = CATEGORIES[e.category];
   const net = computeEntryNet(e);
   return (
@@ -6854,15 +6900,21 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove) {
           onChange={ev => onUpdate(e.id, { taxId: ev.target.value })}
           placeholder="統編" />
       </td>
+      {!groupByMember && (
+        <td className="px-2 py-1">
+          <select className="input-text-plain text-xs w-full" value={e.ownerId || ""}
+            onChange={ev => onUpdate(e.id, { ownerId: ev.target.value })}>
+            <option value="">—</option>
+            {(members || []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </td>
+      )}
       <td className="px-2 py-1">
-        <select className="input-text-plain text-xs w-full" value={e.ownerId || ""}
-          onChange={ev => onUpdate(e.id, { ownerId: ev.target.value })}>
-          <option value="">—</option>
-          {(members || []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </select>
-      </td>
-      <td className="px-2 py-1">
-        <SumInput value={e.gross} onChange={v => onUpdate(e.id, { gross: v })} />
+        <FormulaInput
+          exprValue={e.grossExpr}
+          value={e.gross}
+          onChange={({ expr, value }) => onUpdate(e.id, { gross: value, grossExpr: expr })}
+        />
       </td>
       <td className="px-2 py-1">
         {(() => {
@@ -7055,8 +7107,15 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "76px" }}>格式代號</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "180px" }}>所得發生處</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>統一編號</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>歸戶</th>
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>給付/收入</th>
+                      {!groupByMember && (
+                        <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>歸戶</th>
+                      )}
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "200px" }}>
+                        給付/收入
+                        <div className="text-[9px] font-normal" style={{ color: "var(--ink-mute)" }}>
+                          可填算式 (如 180000+36000)
+                        </div>
+                      </th>
                       <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>必要費用</th>
                       <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>所得總額</th>
                       <th className="px-2 py-2 text-right font-medium" style={{ width: "90px" }}>扣繳稅額</th>
@@ -7067,7 +7126,7 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                     {(() => {
                       // 如果勾選分組,先按成員分;否則按原順序
                       if (!groupByMember) {
-                        return visibleEntries.map(e => renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove));
+                        return visibleEntries.map(e => renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, false));
                       }
                       // 按成員分組:把同一成員的列放一起,中間插分隔列
                       const memberGroups = {};
@@ -7087,12 +7146,12 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                         const grpTotal = grpItems.reduce((s, e) => s + computeEntryNet(e), 0);
                         rows.push(
                           <tr key={`hdr_${key}`} style={{ background: "#f0ede2" }}>
-                            <td colSpan={10} className="px-3 py-1.5 text-xs font-medium" style={{ color: "var(--accent-deep)" }}>
+                            <td colSpan={9} className="px-3 py-1.5 text-xs font-medium" style={{ color: "var(--accent-deep)" }}>
                               👤 {label} <span className="font-normal num ml-2" style={{ color: "var(--ink-mute)" }}>· 共 {grpItems.length} 筆 · 所得合計 {fmt(grpTotal)}</span>
                             </td>
                           </tr>
                         );
-                        grpItems.forEach(e => rows.push(renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove)));
+                        grpItems.forEach(e => rows.push(renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, true)));
                       });
                       return rows;
                     })()}
