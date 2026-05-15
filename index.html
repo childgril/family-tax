@@ -4776,7 +4776,10 @@ function FilingPage({ data, setData, year, setPage }) {
                       : (f.name || "(未指定納稅人)");
                     return (
                       <>
-                        <div className="text-sm font-medium truncate">{displayName}</div>
+                        <div className="text-sm font-medium truncate flex items-center gap-1">
+                          {f.locked && <span style={{ color: "var(--gold)" }}>🔒</span>}
+                          {displayName}
+                        </div>
                         {f.name && f.name !== displayName && (
                           <div className="text-[10px] truncate" style={{ color: "var(--ink-mute)" }}>{f.name}</div>
                         )}
@@ -4861,7 +4864,19 @@ function FilingPage({ data, setData, year, setPage }) {
   );
 }
 
-function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, year, onChange, onDelete }) {
+function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, year, onChange: rawOnChange, onDelete }) {
+  // 鎖定時攔截所有 onChange,只允許「解鎖」操作通過 (locked: false)
+  const onChange = (next) => {
+    if (filing.locked && next.locked !== false) {
+      // 鎖定中且不是解鎖動作 → 忽略
+      return;
+    }
+    rawOnChange(next);
+  };
+  // 鎖定時讓 setProperties / setRentalRecords / setContracts 也被攔下
+  // (這些是全局,不限於本 filing — 但鎖定通常代表此申報戶確定不再動,連帶這些也保護)
+  // 暫時保留可動,只攔 filing 本體更新
+
   const [newPropertyModal, setNewPropertyModal] = React.useState(null); // 新增物件 modal
   const [rentalExpandKey, setRentalExpandKey] = React.useState(0); // 強制 re-render 用
   const [rentalForceState, setRentalForceState] = React.useState(null); // null=用預設 / true=全展開 / false=全收合
@@ -5024,15 +5039,53 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
   return (
     <div className="space-y-5">
       {/* 標題列 */}
-      <div className="card p-5">
+      <div className="card p-5" style={{
+        background: filing.locked ? "#f5f3ec" : "white",
+        borderColor: filing.locked ? "var(--gold)" : "var(--line)",
+        borderWidth: filing.locked ? "2px" : "1px",
+      }}>
         <div className="flex items-center gap-3 mb-3">
+          {filing.locked && (
+            <span className="chip text-xs" style={{ background: "var(--gold)", color: "white", padding: "4px 10px" }}>
+              🔒 已鎖定
+            </span>
+          )}
           <input
             className="font-serif text-2xl flex-1 px-2 py-1 border-b-2"
-            style={{ borderColor: "var(--line)", background: "transparent" }}
+            style={{
+              borderColor: "var(--line)",
+              background: "transparent",
+              color: filing.locked ? "var(--ink-mute)" : "var(--ink)",
+            }}
             value={filing.name}
-            onChange={e => onChange({ ...filing, name: e.target.value })}
+            readOnly={filing.locked}
+            onChange={e => filing.locked ? null : onChange({ ...filing, name: e.target.value })}
           />
-          <button className="btn-danger text-sm" onClick={onDelete}>刪除此申報戶</button>
+          <button
+            className="text-sm px-3 py-2 rounded"
+            style={{
+              background: filing.locked ? "white" : "var(--gold)",
+              color: filing.locked ? "var(--gold)" : "white",
+              border: `1px solid var(--gold)`,
+              fontWeight: 600,
+            }}
+            onClick={() => {
+              if (filing.locked) {
+                if (window.confirm("⚠ 解鎖後可繼續編輯此申報戶資料。確定要解鎖嗎?")) {
+                  onChange({ ...filing, locked: false });
+                }
+              } else {
+                if (window.confirm("🔒 鎖定後此申報戶資料將無法編輯 (避免誤改)。確定要鎖定嗎?")) {
+                  onChange({ ...filing, locked: true });
+                }
+              }
+            }}
+          >
+            {filing.locked ? "🔓 解鎖" : "🔒 完成 · 鎖定"}
+          </button>
+          {!filing.locked && (
+            <button className="btn-danger text-sm" onClick={onDelete}>刪除此申報戶</button>
+          )}
         </div>
 
         {/* 申報戶成員選擇 */}
@@ -8002,62 +8055,182 @@ function OfficialFormView({ result, year, filing }) {
         <div>
           <div className="font-medium mb-2" style={{ color: "var(--accent-deep)" }}>
             ★ 稅額計算式
-            {salarySD > 0 && (
-              <span className="text-xs ml-2 font-normal" style={{ color: "var(--ink-mute)" }}>
-                : 單身者或納稅義務人及配偶所得採合併計算稅額
-                {result.dividendChoice === "combine" ? " - A.股利及盈餘採合併計稅" : " - B.股利及盈餘採分開計稅"}
-              </span>
-            )}
+            {(() => {
+              const chosen = result.chosenMethod;
+              if (!chosen) return null;
+              let methodLabel = "單身者或納稅義務人及配偶所得採合併計算稅額";
+              if (chosen.baseKey === "salarySepTaxpayer") methodLabel = "薪資所得分開計算稅額 (納稅義務人為主)";
+              else if (chosen.baseKey === "salarySepSpouse") methodLabel = "薪資所得分開計算稅額 (配偶為主)";
+              else if (chosen.baseKey === "allSepTaxpayer") methodLabel = "納稅義務人之各類所得分開計算稅額";
+              else if (chosen.baseKey === "allSepSpouse") methodLabel = "配偶之各類所得分開計算稅額";
+              const dividendLabel = chosen.dividendChoice === "combine" ? " - A.股利及盈餘採合併計稅" : " - B.股利及盈餘採分開計稅";
+              return (
+                <span className="text-xs ml-2 font-normal" style={{ color: "var(--ink-mute)" }}>
+                  :{methodLabel}{dividendLabel}
+                </span>
+              );
+            })()}
           </div>
           <div className="p-4 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
-            {/* 第一行(申報書格式):綜所總額 − 免稅 − 扣除 − 差額 − 投資新創 = 淨額 */}
-            <table className="w-full text-xs num" style={{ borderCollapse: "separate", borderSpacing: "8px 4px" }}>
-              <thead>
-                <tr style={{ color: "var(--ink-mute)" }}>
-                  <th className="text-center font-normal underline-offset-2 underline">綜合所得總額</th>
-                  <th className="text-center font-normal w-6">減</th>
-                  <th className="text-center font-normal underline-offset-2 underline">全部免稅額</th>
-                  <th className="text-center font-normal w-6">減</th>
-                  <th className="text-center font-normal underline-offset-2 underline">全部扣除額</th>
-                  <th className="text-center font-normal w-6">減</th>
-                  <th className="text-center font-normal underline-offset-2 underline">基本生活費差額</th>
-                  <th className="text-center font-normal w-6">減</th>
-                  <th className="text-center font-normal underline-offset-2 underline text-[10px]">投資新創事業公司減除金額</th>
-                  <th className="text-center font-normal w-6">等於</th>
-                  <th className="text-center font-normal underline-offset-2 underline">綜合所得淨額</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ fontSize: "16px" }}>
-                  <td className="text-center">{fmt(grossIncome)}</td>
-                  <td className="text-center">−</td>
-                  <td className="text-center">{fmt(exemption)}</td>
-                  <td className="text-center">−</td>
-                  <td className="text-center">{fmt(totalDeduction)}</td>
-                  <td className="text-center">−</td>
-                  <td className="text-center">{fmt(blDiff)}</td>
-                  <td className="text-center">−</td>
-                  <td className="text-center">0</td>
-                  <td className="text-center">=</td>
-                  <td className="text-center font-medium" style={{ color: "var(--accent-deep)" }}>{fmt(netIncome)}</td>
-                </tr>
-              </tbody>
-            </table>
+            {(() => {
+              const chosen = result.chosenMethod;
+              const isSplit = chosen && chosen.formula && (chosen.formula.type === "allSep" || chosen.formula.type === "salarySep");
 
-            {/* 第二行:淨額 × 稅率 − 累進差額 = 應納稅額 */}
-            <table className="w-full text-xs num mt-3" style={{ borderCollapse: "separate", borderSpacing: "8px 4px" }}>
-              <thead>
-                <tr style={{ color: "var(--ink-mute)" }}>
-                  <th className="text-center font-normal underline-offset-2 underline">綜合所得淨額</th>
-                  <th className="text-center font-normal w-6">乘</th>
-                  <th className="text-center font-normal underline-offset-2 underline">稅率</th>
-                  <th className="text-center font-normal w-6">減</th>
-                  <th className="text-center font-normal underline-offset-2 underline">累進差額</th>
-                  <th className="text-center font-normal w-6">等於</th>
-                  <th className="text-center font-normal underline-offset-2 underline">應納稅額</th>
-                </tr>
-              </thead>
-              <tbody>
+              if (isSplit && chosen.sub && chosen.sub.length === 2) {
+                // 分開計算:顯示兩段算式 (主+不含主)
+                const f = chosen.formula;
+                const sub1 = chosen.sub[0];
+                const sub2 = chosen.sub[1];
+                const isAllSep = f.type === "allSep";
+                const isSpouse = chosen.baseKey?.includes("Spouse");
+                const mainLabel = isSpouse ? "配偶" : "納稅義務人";
+                const otherLabel = isSpouse ? "不含配偶" : "不含本人";
+                return (
+                  <div className="space-y-3">
+                    {/* === 第一段:主之塊 === */}
+                    <div>
+                      <div className="text-xs font-medium mb-1" style={{ color: "var(--accent-deep)" }}>
+                        ① {mainLabel}之{isAllSep ? "各類所得" : "薪資"}塊
+                      </div>
+                      <table className="w-full text-xs num" style={{ borderCollapse: "separate", borderSpacing: "8px 4px" }}>
+                        <thead>
+                          <tr style={{ color: "var(--ink-mute)" }}>
+                            <th className="text-center font-normal underline">{mainLabel}{isAllSep ? "各類所得" : "薪資所得"}</th>
+                            <th className="text-center font-normal w-6">減</th>
+                            <th className="text-center font-normal underline">{mainLabel}免稅額</th>
+                            {isAllSep && <th className="text-center font-normal w-6">減</th>}
+                            {isAllSep && <th className="text-center font-normal underline">{mainLabel}儲蓄扣除</th>}
+                            {!isAllSep && <th className="text-center font-normal w-6">減</th>}
+                            {!isAllSep && <th className="text-center font-normal underline">薪資特扣</th>}
+                            <th className="text-center font-normal w-6">等於</th>
+                            <th className="text-center font-normal underline">淨額</th>
+                            <th className="text-center font-normal w-6">乘</th>
+                            <th className="text-center font-normal underline">稅率</th>
+                            <th className="text-center font-normal w-6">等於</th>
+                            <th className="text-center font-normal underline">稅額</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr style={{ fontSize: "14px" }}>
+                            <td className="text-center">{fmt(isAllSep ? (f.mainGrossAfterSalary || 0) : (f.mainSalary || 0))}</td>
+                            <td className="text-center">−</td>
+                            <td className="text-center">{fmt(f.mainExemption || 0)}</td>
+                            {isAllSep && <td className="text-center">−</td>}
+                            {isAllSep && <td className="text-center">{fmt(f.mainSavings || 0)}</td>}
+                            {!isAllSep && <td className="text-center">−</td>}
+                            {!isAllSep && <td className="text-center">{fmt(f.mainSalaryDed || 0)}</td>}
+                            <td className="text-center">=</td>
+                            <td className="text-center font-medium" style={{ color: "var(--accent-deep)" }}>{fmt(sub1.net)}</td>
+                            <td className="text-center">×</td>
+                            <td className="text-center">{(sub1.taxRate * 100).toFixed(0)}%</td>
+                            <td className="text-center">=</td>
+                            <td className="text-center font-medium" style={{ color: "var(--accent-deep)" }}>{fmt(sub1.tax)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* === 第二段:不含主之塊 === */}
+                    <div>
+                      <div className="text-xs font-medium mb-1" style={{ color: "var(--accent-deep)" }}>
+                        ② {otherLabel}塊
+                      </div>
+                      <table className="w-full text-xs num" style={{ borderCollapse: "separate", borderSpacing: "8px 4px" }}>
+                        <thead>
+                          <tr style={{ color: "var(--ink-mute)" }}>
+                            <th className="text-center font-normal underline">綜所總額</th>
+                            <th className="text-center font-normal w-6">減</th>
+                            <th className="text-center font-normal underline">{mainLabel}所得</th>
+                            <th className="text-center font-normal w-6">減</th>
+                            <th className="text-center font-normal underline">{otherLabel}免稅</th>
+                            <th className="text-center font-normal w-6">減</th>
+                            <th className="text-center font-normal underline">扣除額</th>
+                            <th className="text-center font-normal w-6">等於</th>
+                            <th className="text-center font-normal underline">淨額</th>
+                            <th className="text-center font-normal w-6">乘</th>
+                            <th className="text-center font-normal underline">稅率</th>
+                            <th className="text-center font-normal w-6">等於</th>
+                            <th className="text-center font-normal underline">稅額</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr style={{ fontSize: "14px" }}>
+                            <td className="text-center">{fmt(grossIncome)}</td>
+                            <td className="text-center">−</td>
+                            <td className="text-center">{fmt(isAllSep ? (f.mainGrossAfterSalary || 0) : (f.mainSalary || 0))}</td>
+                            <td className="text-center">−</td>
+                            <td className="text-center">{fmt(f.remainExemption || 0)}</td>
+                            <td className="text-center">−</td>
+                            <td className="text-center">{fmt(f.remainDeductTotal || 0)}</td>
+                            <td className="text-center">=</td>
+                            <td className="text-center font-medium" style={{ color: "var(--accent-deep)" }}>{fmt(sub2.net)}</td>
+                            <td className="text-center">×</td>
+                            <td className="text-center">{(sub2.taxRate * 100).toFixed(0)}%</td>
+                            <td className="text-center">=</td>
+                            <td className="text-center font-medium" style={{ color: "var(--accent-deep)" }}>{fmt(sub2.tax)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* === 第三段:合計 === */}
+                    <div className="text-right text-sm py-2" style={{ borderTop: "1px dashed var(--line)", color: "var(--accent-deep)" }}>
+                      應納稅額 = <b className="num">{fmt(sub1.tax)}</b> + <b className="num">{fmt(sub2.tax)}</b> = <b className="num text-base">{fmt(taxBeforeCredits)}</b>
+                    </div>
+                  </div>
+                );
+              }
+
+              // 合併計算 (A 方法):原本一段
+              return (
+                <>
+                  <table className="w-full text-xs num" style={{ borderCollapse: "separate", borderSpacing: "8px 4px" }}>
+                    <thead>
+                      <tr style={{ color: "var(--ink-mute)" }}>
+                        <th className="text-center font-normal underline-offset-2 underline">綜合所得總額</th>
+                        <th className="text-center font-normal w-6">減</th>
+                        <th className="text-center font-normal underline-offset-2 underline">全部免稅額</th>
+                        <th className="text-center font-normal w-6">減</th>
+                        <th className="text-center font-normal underline-offset-2 underline">全部扣除額</th>
+                        <th className="text-center font-normal w-6">減</th>
+                        <th className="text-center font-normal underline-offset-2 underline">基本生活費差額</th>
+                        <th className="text-center font-normal w-6">減</th>
+                        <th className="text-center font-normal underline-offset-2 underline text-[10px]">投資新創事業公司減除金額</th>
+                        <th className="text-center font-normal w-6">等於</th>
+                        <th className="text-center font-normal underline-offset-2 underline">綜合所得淨額</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr style={{ fontSize: "16px" }}>
+                        <td className="text-center">{fmt(grossIncome)}</td>
+                        <td className="text-center">−</td>
+                        <td className="text-center">{fmt(exemption)}</td>
+                        <td className="text-center">−</td>
+                        <td className="text-center">{fmt(totalDeduction)}</td>
+                        <td className="text-center">−</td>
+                        <td className="text-center">{fmt(blDiff)}</td>
+                        <td className="text-center">−</td>
+                        <td className="text-center">0</td>
+                        <td className="text-center">=</td>
+                        <td className="text-center font-medium" style={{ color: "var(--accent-deep)" }}>{fmt(netIncome)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  {/* 第二行:淨額 × 稅率 − 累進差額 = 應納稅額 */}
+                  <table className="w-full text-xs num mt-3" style={{ borderCollapse: "separate", borderSpacing: "8px 4px" }}>
+                    <thead>
+                      <tr style={{ color: "var(--ink-mute)" }}>
+                        <th className="text-center font-normal underline-offset-2 underline">綜合所得淨額</th>
+                        <th className="text-center font-normal w-6">乘</th>
+                        <th className="text-center font-normal underline-offset-2 underline">稅率</th>
+                        <th className="text-center font-normal w-6">減</th>
+                        <th className="text-center font-normal underline-offset-2 underline">累進差額</th>
+                        <th className="text-center font-normal w-6">等於</th>
+                        <th className="text-center font-normal underline-offset-2 underline">應納稅額</th>
+                      </tr>
+                    </thead>
+                    <tbody>
                 <tr style={{ fontSize: "16px" }}>
                   <td className="text-center">{fmt(netIncome)}</td>
                   <td className="text-center">×</td>
@@ -8069,6 +8242,9 @@ function OfficialFormView({ result, year, filing }) {
                 </tr>
               </tbody>
             </table>
+                </>
+              );
+            })()}
 
             {/* 第三行:應納 − 抵減 − 扣繳 − 股利可抵 − 大陸地區 = 應自繳/應退稅 */}
             <table className="w-full text-xs num mt-3" style={{ borderCollapse: "separate", borderSpacing: "8px 4px" }}>
