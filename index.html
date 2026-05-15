@@ -4878,6 +4878,7 @@ function FilingPage({ data, setData, year, setPage }) {
               setRentalRecords={(next) => setData({ ...data, rentalRecords: next })}
               contracts={data.contracts || []}
               setContracts={(next) => setData({ ...data, contracts: next })}
+              allFilings={data.filings || []}
               payerDirectory={data.payerDirectory || {}}
               savePayer={(taxId, name) => {
                 if (!taxId || !name) return;
@@ -4896,7 +4897,7 @@ function FilingPage({ data, setData, year, setPage }) {
   );
 }
 
-function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, payerDirectory, savePayer, year, onChange: rawOnChange, onDelete }) {
+function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, allFilings, payerDirectory, savePayer, year, onChange: rawOnChange, onDelete }) {
   // 鎖定時攔截所有 onChange,只允許「解鎖」操作通過 (locked: false)
   const onChange = (next) => {
     if (filing.locked && next.locked !== false) {
@@ -5693,11 +5694,54 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               const defaultOpen = isActive;
               const isOpen = rentalForceState === null ? defaultOpen : rentalForceState;
 
-              // 算去年同物件的應稅租金 (作參考) — 直接用合約自動算,不參考去年的手動覆寫
-              const lastYear = year - 1;
-              const lastYearComputables = getComputablesForProperty(p, lastYear, contracts, rentalRecords, {});
-              const lastYearTaxable = computeRentalIncome(lastYearComputables, params).taxable;
-              const lastYearAgg = aggregateContractsForYear(contracts, p.id, lastYear, {});
+              // 算前幾年同物件的應稅租金 (作參考) — 直接用合約自動算,不參考去年的手動覆寫
+              // 同時參考使用者已輸入的「申報應稅手動覆寫」(declaredTaxableOverrides) 看其他年度有沒有覆寫過
+              const priorYearsData = [];
+              for (let offset = 1; offset <= 3; offset++) {
+                const py = year - offset;
+                if (py < 110) break;  // 不查 110 之前 (參數可能未定義)
+                const pyComputables = getComputablesForProperty(p, py, contracts, rentalRecords, {});
+                const pyTaxableAuto = computeRentalIncome(pyComputables, params).taxable;
+                const pyAgg = aggregateContractsForYear(contracts, p.id, py, {});
+                // 也找該年度的「申報應稅 override」(若該年度的 filing 有填手動覆寫,優先顯示)
+                let pyTaxableUsed = pyTaxableAuto;
+                const pyFiling = (allFilings || []).find(f => f.year === py && (
+                  f.taxpayerId === p.ownerId || f.spouseId === p.ownerId || (f.dependentIds || []).includes(p.ownerId)
+                ));
+                if (pyFiling) {
+                  const dtOv = pyFiling.declaredTaxableOverrides || {};
+                  // 把該物件相關的 override 加總
+                  let sumOv = 0, hasAnyOv = false;
+                  const pyContracts = pyAgg.contracts.filter(c => c.months > 0);
+                  pyContracts.forEach(c => {
+                    const k = `c_${c.contractId}_${py}`;
+                    if (dtOv[k] !== undefined && dtOv[k] !== null && dtOv[k] !== "") {
+                      sumOv += toNum(dtOv[k]);
+                      hasAnyOv = true;
+                    } else {
+                      // 沒覆寫則用 auto
+                      const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                      const comp = {
+                        type: c.isPublic ? "public" : (p.assetType === "land" ? "land" : "general"),
+                        monthlyRent: 0, months: 12,
+                        annualRentDirect: appliedAnnual,
+                        landTax: toNum(p.landTax || 0),
+                        expenseRatio: 0.43,
+                      };
+                      sumOv += computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
+                    }
+                  });
+                  if (hasAnyOv || pyContracts.length > 0) pyTaxableUsed = sumOv;
+                  // 也檢查 n_ (沒合約物件) override
+                  const nKey = `n_${p.id}_${py}`;
+                  if (dtOv[nKey] !== undefined && dtOv[nKey] !== null && dtOv[nKey] !== "") {
+                    pyTaxableUsed = toNum(dtOv[nKey]);
+                  }
+                }
+                if (pyAgg.anyContractInYear || pyTaxableUsed > 0) {
+                  priorYearsData.push({ year: py, taxable: pyTaxableUsed });
+                }
+              }
 
               return (
                 <details key={`${p.id}_${rentalExpandKey}`} className="rounded" open={isOpen} style={{ background: isActive ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
@@ -5731,13 +5775,17 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       {agg.hasMixedType && <span className="chip chip-amber text-[10px]">公益+一般</span>}
                       {override && <span className="chip chip-accent text-[10px]">手動覆寫</span>}
                     </div>
-                    {/* 去年同物件參考 */}
-                    {lastYearAgg.anyContractInYear && (
-                      <div className="text-right pr-3" style={{ borderRight: "1px solid var(--line-soft)" }}>
-                        <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{lastYear} 年應稅</div>
-                        <div className="font-serif num text-sm" style={{ color: "var(--ink-soft)" }}>
-                          {fmt(lastYearTaxable)}
-                        </div>
+                    {/* 前幾年同物件參考 (帶出歷年申報應稅) */}
+                    {priorYearsData.length > 0 && (
+                      <div className="flex items-center gap-3 pr-3" style={{ borderRight: "1px solid var(--line-soft)" }}>
+                        {priorYearsData.map(pd => (
+                          <div key={pd.year} className="text-right">
+                            <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{pd.year} 年應稅</div>
+                            <div className="font-serif num text-sm" style={{ color: "var(--ink-soft)" }}>
+                              {fmt(pd.taxable)}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                     <div className="text-right">
