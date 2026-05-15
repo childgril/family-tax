@@ -124,6 +124,7 @@ const TAX_PARAMS = {
     educationDeduction: 25000,
     preschoolFirst: 150000,
     preschoolOther: 225000,
+    preschoolAgeLimit: 6,
     longTermCare: 180000,         // 114起追溯提高
     savingsDeduction: 270000,
     rentDeduction: 180000,
@@ -150,8 +151,9 @@ const TAX_PARAMS = {
     salaryDeduction: 218000,    // 薪資所得特別扣除額
     disabilityDeduction: 218000,// 身心障礙特別扣除額
     educationDeduction: 25000,  // 教育學費扣除額(每人)
-    preschoolFirst: 150000,     // 幼兒學前扣除額(第一名,5歲以下)
+    preschoolFirst: 150000,     // 幼兒學前扣除額(第一名)
     preschoolOther: 225000,     // 幼兒學前扣除額(第二名以上)
+    preschoolAgeLimit: 6,       // 113 年起放寬至 6 歲以下 (含未滿 6 歲)
     longTermCare: 180000,       // 114年追溯提高至 180,000 (原 120,000)
     savingsDeduction: 270000,   // 儲蓄投資扣除額上限
     rentDeduction: 180000,      // 房屋租金支出特別扣除額上限
@@ -180,6 +182,7 @@ const TAX_PARAMS = {
     educationDeduction: 25000,
     preschoolFirst: 150000,
     preschoolOther: 225000,
+    preschoolAgeLimit: 6,
     longTermCare: 120000,
     savingsDeduction: 270000,
     rentDeduction: 180000,
@@ -208,6 +211,7 @@ const TAX_PARAMS = {
     educationDeduction: 25000,
     preschoolFirst: 120000,
     preschoolOther: 120000,
+    preschoolAgeLimit: 5,
     longTermCare: 120000,
     savingsDeduction: 270000,
     rentDeduction: 120000, // 112年仍為列舉扣除額
@@ -236,6 +240,7 @@ const TAX_PARAMS = {
     educationDeduction: 25000,
     preschoolFirst: 120000,
     preschoolOther: 120000,
+    preschoolAgeLimit: 5,
     longTermCare: 120000,
     savingsDeduction: 270000,
     rentDeduction: 120000,
@@ -264,6 +269,7 @@ const TAX_PARAMS = {
     educationDeduction: 25000,
     preschoolFirst: 120000,
     preschoolOther: 120000,
+    preschoolAgeLimit: 5,
     longTermCare: 120000,
     savingsDeduction: 270000,
     rentDeduction: 120000,
@@ -1092,8 +1098,10 @@ function computeTaxForFiling(filing, members, year) {
     // 教育學費: 限子女、孫子女 (財政部解釋以子女為限,孫子女實務上認可)
     const rel = RELATIONS[m.relation];
     if (m.isStudent && rel && rel.isChild) studentCount++;
-    // 幼兒學前: 限子女、孫子女且 < 6 歲 (年齡以該年度 12/31 為準)
-    if (memberAge > 0 && memberAge < 6 && rel && rel.isChild) preschoolCount++;
+    // 幼兒學前: 限子女、孫子女且年齡 < 上限 (113 起 6 歲以下;112 及之前 5 歲以下)
+    // 年齡以該年度 12/31 為準,0 歲也算
+    const preschoolAgeLimit = params.preschoolAgeLimit || 6;
+    if (memberAge >= 0 && memberAge < preschoolAgeLimit && rel && rel.isChild) preschoolCount++;
     if (m.needsLongTermCare) longTermCareCount++;
   });
 
