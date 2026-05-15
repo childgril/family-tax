@@ -1242,30 +1242,29 @@ function computeTaxForFiling(filing, members, year) {
   const disasterCapped = applyOverride("disaster", disaster);
   // 房貸的最終扣除值在 actualMortgage 計算 (含 30 萬上限);此處保留原始值
 
-  const itemizedTotal =
-    donationGeneralCapped + donationUnlimitedCapped +
-    insurancePersonalCapped + insuranceHealthCapped +
-    medicalCapped + disasterCapped + mortgageInterest;
-    // 註:mortgageInterest 在後面會被 actualMortgage 取代
-
-  const useItemized = filing.deductionChoice === "itemized" ||
-    (filing.deductionChoice === "auto" && itemizedTotal > standardDeduction);
-
-  const generalDeduction = useItemized ? itemizedTotal : standardDeduction;
-
-  // === 4. 特別扣除額 ===
-  // 儲蓄投資扣除額:依稅法規定,**只有「5A 金融機構存款利息」適用**
-  // 5B (證券公司、保險公司等非金融機構利息) 不適用扣除
-  // 邏輯:
-  //   - 若使用者用「逐筆所得明細」表 → savingsAuto = min(Σ 5A 利息, 270k)
-  //   - 若使用者只用 ① 區單格輸入 (沒分代號) → 退回舊邏輯,假設全部利息都是 5A
-  //   - 使用者可手動覆寫
+  // === 4a. 儲蓄投資扣除額 (要早算,因為房貸列舉判斷依賴它) ===
   const hasInterestEntries = (filing.incomeEntries || []).some(e => e.category === "interest");
   const savingsBase = hasInterestEntries ? interest5A : interest;  // 沒填 entries 時退回全部利息
   const savingsAuto = Math.min(savingsBase, params.savingsDeduction);
   const savings = filing.savingsOverride
     ? Math.min(Math.max(0, toNum(filing.savingsOverrideAmount)), params.savingsDeduction)
     : savingsAuto;
+
+  // 預估 actualMortgage (假設用列舉的情況):扣儲蓄後 + 30 萬上限
+  // 此值用於判斷 useItemized,避免「判斷時用原始 mortgageInterest 誤判列舉較優」
+  const actualMortgageIfItemized = Math.min(Math.max(0, mortgageInterest - savings), params.mortgageLimit);
+
+  const itemizedTotal =
+    donationGeneralCapped + donationUnlimitedCapped +
+    insurancePersonalCapped + insuranceHealthCapped +
+    medicalCapped + disasterCapped + actualMortgageIfItemized;
+
+  const useItemized = filing.deductionChoice === "itemized" ||
+    (filing.deductionChoice === "auto" && itemizedTotal > standardDeduction);
+
+  const generalDeduction = useItemized ? itemizedTotal : standardDeduction;
+
+  // === 4. 特別扣除額 (savings 已在上方算過) ===
   // 身障特別扣除:預設按 isDisabled × params;允許手動覆寫
   const disabilityDedAuto = disabilityCount * params.disabilityDeduction;
   const disabilityDed = filing.disabilityDedOverride !== undefined && filing.disabilityDedOverride !== null && filing.disabilityDedOverride !== ""
