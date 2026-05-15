@@ -4249,9 +4249,11 @@ function FilingPage({ data, setData, year, setPage }) {
                           <span className="font-medium">{fmt(Math.abs(displayAmount))}</span>
                           {hasActual && <span className="chip chip-green text-[9px] ml-1">實際</span>}
                         </div>
-                        {hasActual && Math.abs(toNum(actualAmt) - sysFinalDue) > 0 && (
+                        {hasActual && (
                           <div className="text-[9px] num" style={{ color: "var(--ink-mute)" }}>
-                            (系統算 {sysFinalDue >= 0 ? fmt(sysFinalDue) : `-${fmt(-sysFinalDue)}`})
+                            {Math.abs(toNum(actualAmt) - sysFinalDue) === 0
+                              ? `✓ 系統算 ${sysFinalDue >= 0 ? fmt(sysFinalDue) : `-${fmt(-sysFinalDue)}`} (一致)`
+                              : `(系統算 ${sysFinalDue >= 0 ? fmt(sysFinalDue) : `-${fmt(-sysFinalDue)}`})`}
                           </div>
                         )}
                         {/* 點擊編輯實際金額 */}
@@ -4315,6 +4317,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
   const [newPropertyModal, setNewPropertyModal] = React.useState(null); // 新增物件 modal
   const [rentalExpandKey, setRentalExpandKey] = React.useState(0); // 強制 re-render 用
   const [rentalForceState, setRentalForceState] = React.useState(null); // null=用預設 / true=全展開 / false=全收合
+  const [rentalSectionCollapsed, setRentalSectionCollapsed] = React.useState(false);
   // 把 properties 過濾出屬於這申報戶的人持有的
   const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
   const householdProperties = properties.filter(p => filerIds.includes(p.ownerId));
@@ -4576,15 +4579,15 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
       />
 
       {/* 各成員所得輸入 */}
-      <div className="card">
-        <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
-          <div className="ornament">① INCOME · 各成員所得</div>
-          {incomeEntries.length > 0 && (
-            <div className="text-[10px]" style={{ color: "var(--green)" }}>
-              ✓ 自動從上方「逐筆所得明細」帶入,下方輸入框可額外補加
-            </div>
-          )}
-        </div>
+      <CollapsibleCard
+        title="① INCOME · 各成員所得"
+        defaultOpen={true}
+        headerExtra={incomeEntries.length > 0 && (
+          <div className="text-[10px]" style={{ color: "var(--green)" }}>
+            ✓ 自動從上方「逐筆所得明細」帶入,下方輸入框可額外補加
+          </div>
+        )}
+      >
         <div className="p-5">
           <table className="w-full text-sm">
             <thead>
@@ -4719,7 +4722,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             </div>
           </div>
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* 特別扣除額覆寫 (教育/幼兒/長照/身障) — 罕用,僅在實際與系統不符時使用 */}
       {(result.educationDedAuto > 0 || result.preschoolDed > 0 || result.longTermCareDed > 0 || result.disabilityDed > 0
@@ -4773,9 +4776,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
       )}
 
       {/* 列舉扣除額輸入 */}
-      <div className="card">
-        <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
-          <div className="ornament">② DEDUCTIONS · 一般扣除額</div>
+      <CollapsibleCard
+        title="② DEDUCTIONS · 一般扣除額"
+        defaultOpen={true}
+        headerExtra={
           <div className="flex gap-1">
             {["auto", "standard", "itemized"].map(c => (
               <button key={c} onClick={() => onChange({ ...filing, deductionChoice: c })}
@@ -4789,7 +4793,8 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               </button>
             ))}
           </div>
-        </div>
+        }
+      >
         <div className="p-5">
           {/* 申報書式表格:項目 / 實際發生 / 系統算可扣除 / 手動覆寫 */}
           <table className="w-full text-sm">
@@ -5027,8 +5032,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               </div>
             </div>
           </div>
-        </div>
-      </div>
 
           {/* 捐贈試算器 */}
           <DonationSimulator
@@ -5037,12 +5040,15 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             params={params}
             onApplyDonation={delta => updateField("itemizedDeductions.donationGeneral",
               toNum(filing.itemizedDeductions.donationGeneral) + delta)} />
+        </div>
+      </CollapsibleCard>
 
       {/* ③ 抵減與已扣繳 */}
-      <div className="card">
-        <div className="px-5 py-3 ornament" style={{ borderBottom: "1px solid var(--line)" }}>
-          ③ CREDITS · 稅額抵減與已扣繳
-        </div>
+      <CollapsibleCard
+        title="③ CREDITS · 稅額抵減與已扣繳"
+        subtitle="股利說明、已扣繳(自動)、重購自宅扣抵、其他抵減"
+        defaultOpen={false}
+      >
         <div className="p-5 space-y-4">
           {/* 已扣繳 (自動帶入,只讀) + 其他抵減 */}
           <div className="grid grid-cols-3 gap-3">
@@ -5094,7 +5100,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             </div>
           </div>
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* ④ 計稅方式比較 (有 2+ 種方法時顯示,例如夫妻申報或有股利) */}
       {result.taxMethods && result.taxMethods.length > 1 && (
@@ -5111,9 +5117,18 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
       {/* 本戶租賃 — 合約自動攤分,每物件可展開查看與手動覆寫 */}
       {householdProperties.length > 0 && (
         <div className="card">
-          <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
-            <div className="ornament">⑥ RENTAL RECORDS · 本戶 {year} 年度租賃紀錄</div>
-            <div className="flex items-center gap-2">
+          <div
+            className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+            style={{ borderBottom: rentalSectionCollapsed ? "none" : "1px solid var(--line)" }}
+            onClick={() => setRentalSectionCollapsed(!rentalSectionCollapsed)}
+          >
+            <div className="flex items-center gap-2 flex-1">
+              <span className="text-xs" style={{ color: "var(--ink-mute)", minWidth: "12px" }}>
+                {rentalSectionCollapsed ? "▶" : "▼"}
+              </span>
+              <div className="ornament">⑥ RENTAL RECORDS · 本戶 {year} 年度租賃紀錄</div>
+            </div>
+            <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
               <button
                 className="text-xs px-2 py-1 rounded hover:bg-gray-100"
                 style={{ color: "var(--ink-soft)", border: "1px solid var(--line)" }}
@@ -5153,6 +5168,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             </div>
           </div>
 
+          {!rentalSectionCollapsed && (<>
           {/* 申報書對照明細表 (跟申報書同欄位:地址 / 申報租金 / 所得總額) */}
           <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
             <div className="text-xs font-medium mb-2" style={{ color: "var(--ink-soft)" }}>
@@ -5184,7 +5200,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       const ownerName = owner ? owner.name : "—";
                       const isLand = p.assetType === "land";
 
-                      // 取得實際計入綜所的 computables (沒合約但有手動 rentalRecords 的情況也會被涵蓋)
+                      // 檢查使用者是否勾選「計入申報」(預設 true,取消勾選 = 不計入)
+                      const overrideKey = `${p.id}_${year}`;
+                      const override = (filing.manualRentOverrides || {})[overrideKey];
+                      const isIncluded = override ? override.includeInFiling !== false : true;
+                      if (!isIncluded) return;  // 未勾選計入 → 不顯示在對照表
+
+                      // 取得實際計入綜所的 computables
                       const computables = getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides);
 
                       if (agg.anyContractInYear && agg.contracts.length > 0) {
@@ -5748,6 +5770,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             ⓘ 系統優先用「合約管理」頁的合約資料,依日期自動攤分到該年度。
             <b>同一物件可同時有公益出租 + 一般出租合約,各自獨立計算稅務</b> (公益部分套用每月免稅 15,000 優惠)。
           </div>
+          </>)}
         </div>
       )}
 
@@ -5885,6 +5908,35 @@ function DonationSimulator({ filing, result, params, onApplyDonation }) {
   );
 }
 
+function CollapsibleCard({ title, subtitle, headerExtra, children, defaultOpen = true, borderColor, headerBg, titleColor }) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return (
+    <div className="card" style={{ borderColor: borderColor || undefined }}>
+      <div
+        className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+        style={{ borderBottom: open ? "1px solid var(--line)" : "none", background: headerBg }}
+        onClick={() => setOpen(!open)}
+      >
+        <div className="flex items-center gap-2 flex-1">
+          <span className="text-xs" style={{ color: "var(--ink-mute)", minWidth: "12px" }}>
+            {open ? "▼" : "▶"}
+          </span>
+          <div className="flex-1">
+            <div className="ornament" style={{ color: titleColor || "var(--ink-soft)" }}>{title}</div>
+            {subtitle && (
+              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{subtitle}</div>
+            )}
+          </div>
+          {headerExtra && (
+            <div onClick={e => e.stopPropagation()}>{headerExtra}</div>
+          )}
+        </div>
+      </div>
+      {open && children}
+    </div>
+  );
+}
+
 function SettlementPanel({ filing, onChange, systemFinalDue }) {
   const settlement = filing.actualSettlement || {};
   const adjustments = filing.adjustments || [];
@@ -5934,14 +5986,26 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
     return s + v;
   }, 0);
 
+  const [collapsed, setCollapsed] = React.useState(false);
+
   return (
     <div className="card">
-      <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
-        <div className="ornament">⑤ SETTLEMENT · 實際結算與後續調整</div>
+      <div
+        className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+        style={{ borderBottom: collapsed ? "none" : "1px solid var(--line)" }}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <div className="flex items-center gap-2 flex-1">
+          <span className="text-xs" style={{ color: "var(--ink-mute)", minWidth: "12px" }}>
+            {collapsed ? "▶" : "▼"}
+          </span>
+          <div className="ornament">⑤ SETTLEMENT · 實際結算與後續調整</div>
+        </div>
         <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
           記錄實際繳/退金額(可能與系統試算差幾元四捨五入)+ 後續補繳/罰金
         </div>
       </div>
+      {!collapsed && (
       <div className="p-5 space-y-4">
 
         {/* 實際結算 */}
@@ -6158,6 +6222,7 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -6175,6 +6240,7 @@ function DeductionInput({ label, hint, value, onChange }) {
 function TaxMethodsPanel({ result, filing, onChange }) {
   const allMethods = result.taxMethods;
   const isAuto = (filing.taxMethod || "auto") === "auto";
+  const [collapsed, setCollapsed] = React.useState(false);
   // 預設只顯示「股利合併」(A 變體);打勾才顯示「股利分開 28%」(B 變體)
   const allBest = result.bestMethod;
   const chosen = result.chosenMethod;
@@ -6191,14 +6257,24 @@ function TaxMethodsPanel({ result, filing, onChange }) {
 
   return (
     <div className="card" style={{ borderColor: "var(--green)" }}>
-      <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)", background: "var(--green-soft)" }}>
-        <div className="ornament" style={{ color: "#3d5235" }}>
-          ④ TAX METHODS · {methods.length} 種計稅方式比較 (所得稅法第15條)
+      <div
+        className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-green-50"
+        style={{ borderBottom: collapsed ? "none" : "1px solid var(--line)", background: "var(--green-soft)" }}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <div className="flex items-center gap-2 flex-1">
+          <span className="text-xs" style={{ color: "#3d5235", minWidth: "12px" }}>
+            {collapsed ? "▶" : "▼"}
+          </span>
+          <div className="ornament" style={{ color: "#3d5235" }}>
+            ④ TAX METHODS · {methods.length} 種計稅方式比較 (所得稅法第15條)
+          </div>
         </div>
         <div className="text-xs" style={{ color: "#3d5235" }}>
           ✓ 系統已自動採用稅最低的方式 (省下 {fmt(methods[0].finalDue - best.finalDue)} 元)
         </div>
       </div>
+      {!collapsed && (
       <div className="p-5">
         <div className="flex items-center justify-between mb-3">
           <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
@@ -6286,6 +6362,7 @@ function TaxMethodsPanel({ result, filing, onChange }) {
           </span>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -6832,16 +6909,29 @@ function OfficialFormView({ result, year, filing }) {
   const itemizedDeductions = filing.itemizedDeductions || {};
   // 為了在「綜合所得總額」旁顯示 sub 提示
   const grossSub = salarySD > 0 ? `薪資 ${fmt(grossIncomeRaw)} − 薪資特扣 ${fmt(salarySD)}` : null;
+  const [officialCollapsed, setOfficialCollapsed] = React.useState(false);
 
   return (
-    <div className="card mb-4" style={{ background: "white" }}>
-      <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)" }}>
-        <div className="ornament" style={{ color: "var(--accent-deep)" }}>OFFICIAL FORM VIEW</div>
-        <div className="font-serif text-base">📋 {year} 年度結算申報書(試算)</div>
-        <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
-          參照財政部「綜合所得稅結算申報試算通知書」格式
+    <div className="card mb-4" style={{ background: "white", border: "2px solid #c53030" }}>
+      <div
+        className="px-5 py-3 cursor-pointer hover:bg-red-50"
+        style={{ borderBottom: officialCollapsed ? "none" : "1px solid var(--line)", background: "#fff5f5" }}
+        onClick={() => setOfficialCollapsed(!officialCollapsed)}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color: "#c53030", minWidth: "12px" }}>
+            {officialCollapsed ? "▶" : "▼"}
+          </span>
+          <div className="flex-1">
+            <div className="ornament" style={{ color: "#c53030" }}>OFFICIAL FORM VIEW</div>
+            <div className="font-serif text-base" style={{ color: "#c53030" }}>📋 {year} 年度結算申報書(試算)</div>
+            <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+              參照財政部「綜合所得稅結算申報試算通知書」格式
+            </div>
+          </div>
         </div>
       </div>
+      {!officialCollapsed && (<>
 
       {/* 大塊綠色補繳/退稅顯示 + 採用列舉省了多少 */}
       <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
@@ -7164,6 +7254,7 @@ function OfficialFormView({ result, year, filing }) {
           </div>
         )}
       </div>
+      </>)}
     </div>
   );
 }
