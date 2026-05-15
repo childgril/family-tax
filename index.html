@@ -4321,7 +4321,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
   const [newPropertyModal, setNewPropertyModal] = React.useState(null); // 新增物件 modal
   const [rentalExpandKey, setRentalExpandKey] = React.useState(0); // 強制 re-render 用
   const [rentalForceState, setRentalForceState] = React.useState(null); // null=用預設 / true=全展開 / false=全收合
-  const [rentalSectionCollapsed, setRentalSectionCollapsed] = React.useState(false);
+  const [rentalSectionCollapsed, setRentalSectionCollapsed] = React.useState(true);
   // 把 properties 過濾出屬於這申報戶的人持有的
   const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
   const householdProperties = properties.filter(p => filerIds.includes(p.ownerId));
@@ -4582,542 +4582,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         onRemove={removeEntry}
       />
 
-      {/* 各成員所得輸入 */}
-      <CollapsibleCard
-        title="① INCOME · 各成員所得"
-        defaultOpen={true}
-        headerExtra={incomeEntries.length > 0 && (
-          <div className="text-[10px]" style={{ color: "var(--green)" }}>
-            ✓ 自動從上方「逐筆所得明細」帶入,下方輸入框可額外補加
-          </div>
-        )}
-      >
-        <div className="p-5">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                <th className="text-left py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>成員</th>
-                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>薪資</th>
-                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>利息</th>
-                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
-                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>租金 (自動)</th>
-                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>其他</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.filers.map(m => {
-                const income = filing.memberIncome?.[m.id] || {};
-                const myProps = householdProperties.filter(p => p.ownerId === m.id);
-                const myComputable = myProps.flatMap(p =>
-                  getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides));
-                const myRental = computeRentalIncome(myComputable, params);
-                const includedCount = myComputable.length;
-                // 從 entries 算這位成員的各類別所得
-                const memberEntries = incomeEntries.filter(e => e.ownerId === m.id);
-                const entrySum = (cat) => memberEntries
-                  .filter(e => e.category === cat)
-                  .reduce((s, e) => s + computeEntryNet(e), 0);
-                const fromEntriesSalary = entrySum("salary");
-                const fromEntriesInterest = entrySum("interest");
-                const fromEntriesDividend = entrySum("dividend");
-                const fromEntriesOther = entrySum("executive") + entrySum("other");
-                const showEntryHint = (val) => val > 0
-                  ? <div className="text-[10px]" style={{ color: "var(--green)" }}>📑 +{fmt(val)}</div>
-                  : null;
-                return (
-                  <tr key={m.id} className="table-row align-top">
-                    <td className="py-2 font-medium">
-                      {m.name}
-                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                        {m.id === filing.taxpayerId ? "本人" : (m.id === filing.spouseId ? "配偶" : "扶養")}
-                      </div>
-                    </td>
-                    <td className="py-2 text-right">
-                      <CombinedIncomeCell
-                        entriesValue={fromEntriesSalary}
-                        manualValue={toNum(income.salary)}
-                        onChangeManual={v => updateIncome(m.id, "salary", v)}
-                        width="w-28"
-                      />
-                    </td>
-                    <td className="py-2 text-right">
-                      <CombinedIncomeCell
-                        entriesValue={fromEntriesInterest}
-                        manualValue={toNum(income.interest)}
-                        onChangeManual={v => updateIncome(m.id, "interest", v)}
-                        width="w-24"
-                      />
-                    </td>
-                    <td className="py-2 text-right">
-                      <CombinedIncomeCell
-                        entriesValue={fromEntriesDividend}
-                        manualValue={toNum(income.dividend)}
-                        onChangeManual={v => updateIncome(m.id, "dividend", v)}
-                        width="w-24"
-                      />
-                    </td>
-                    <td className="py-2 text-right num text-xs" title={myComputable.map(p => p.name).join(", ")}>
-                      {fmt(myRental.taxable)}
-                      {myProps.length > 0 && <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                        計入 {includedCount}/{myProps.length} 物件
-                      </div>}
-                    </td>
-                    <td className="py-2 text-right">
-                      <CombinedIncomeCell
-                        entriesValue={fromEntriesOther}
-                        manualValue={toNum(income.other)}
-                        onChangeManual={v => updateIncome(m.id, "other", v)}
-                        width="w-24"
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr className="divider-double" style={{ background: "#fafaf6" }}>
-                <td className="py-3 font-medium">總計</td>
-                <td className="py-3 text-right num font-medium">{fmt(result.salaryGross)}</td>
-                <td className="py-3 text-right num font-medium">{fmt(result.interest)}</td>
-                <td className="py-3 text-right num font-medium">{fmt(result.dividend)}</td>
-                <td className="py-3 text-right num font-medium">{fmt(result.rentalTaxable)}</td>
-                <td className="py-3 text-right num font-medium">{fmt(result.otherIncome)}</td>
-              </tr>
-            </tfoot>
-          </table>
-
-          {/* 儲蓄投資特別扣除額提示 */}
-          <div className="mt-4 p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex-1">
-                <div className="text-xs font-medium mb-1" style={{ color: "var(--ink-soft)" }}>
-                  ⓘ 儲蓄投資特別扣除額 (從利息自動計算)
-                </div>
-                {result.hasInterestEntries ? (
-                  // 有逐筆明細時:顯示 5A vs 全部利息的拆分
-                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                    <div className="num">
-                      ✓ 5A 金融機構利息: <span style={{ color: "var(--green)" }}>{fmt(result.interest5A)}</span> → 可享儲蓄扣除
-                    </div>
-                    {result.has5BEntries && (
-                      <div className="num mt-0.5">
-                        ✗ 5B 非金融機構利息: <span style={{ color: "var(--gold)" }}>{fmt((result.interest || 0) - (result.interest5A || 0))}</span> → 不可扣 (保險/證券公司等)
-                      </div>
-                    )}
-                    <div className="mt-1">
-                      系統採用 5A 部分 = min({fmt(result.interest5A)}, {fmt(params.savingsDeduction)}) = <b>{fmt(result.savingsAuto)}</b>
-                    </div>
-                  </div>
-                ) : (
-                  // 沒明細時:沿用舊邏輯提示
-                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                    系統自動套用 = min(全戶利息, {fmt(params.savingsDeduction)})。
-                    <br />
-                    ⚠ 若你的利息包含郵局存簿、公債、公司債、保險公司利息(5B)等<b>不適用</b>項目,請改用「📑 所得明細逐筆輸入」並區分 5A / 5B,系統會自動排除不適用利息。
-                  </div>
-                )}
-              </div>
-              <div className="text-right">
-                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>實際採用</div>
-                <div className="font-serif text-2xl num" style={{ color: "var(--accent-deep)" }}>
-                  {fmt(result.savings)}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </CollapsibleCard>
-
-      {/* 特別扣除額覆寫 (教育/幼兒/長照/身障) — 罕用,僅在實際與系統不符時使用 */}
-      {(result.educationDedAuto > 0 || result.preschoolDed > 0 || result.longTermCareDed > 0 || result.disabilityDed > 0
-        || filing.educationDedOverride !== undefined) && (
-        <div className="card">
-          <details>
-            <summary className="px-5 py-3 cursor-pointer text-sm font-medium" style={{ borderBottom: "1px solid var(--line)", color: "var(--ink-soft)" }}>
-              ▸ 特別扣除額覆寫(教育學費等) <span className="text-xs ml-2" style={{ color: "var(--ink-mute)" }}>(申報書與系統不符時使用)</span>
-            </summary>
-            <div className="p-5 space-y-3 text-sm">
-              {/* 教育學費 */}
-              <div className="flex items-center gap-3">
-                <span style={{ minWidth: "100px", color: "var(--ink-soft)" }}>教育學費特扣</span>
-                <div className="num" style={{ minWidth: "80px", color: "var(--ink-mute)" }}>
-                  系統算: {fmt(result.educationDedAuto || 0)}
-                  {result.studentCount > 0 && (
-                    <span className="text-[10px] ml-1">({result.studentCount} 位在學)</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <input type="number"
-                    className="input-text w-24 text-right text-sm"
-                    placeholder="覆寫"
-                    value={filing.educationDedOverride !== undefined && filing.educationDedOverride !== null ? filing.educationDedOverride : ""}
-                    onChange={e => {
-                      const v = e.target.value;
-                      onChange({ ...filing, educationDedOverride: v === "" ? undefined : Number(v) });
-                    }} />
-                  {filing.educationDedOverride !== undefined && filing.educationDedOverride !== null && (
-                    <button className="text-[10px] hover:underline" style={{ color: "var(--ink-mute)" }}
-                      onClick={() => onChange({ ...filing, educationDedOverride: undefined })}>
-                      ↻ 還原
-                    </button>
-                  )}
-                </div>
-                <span className="text-[10px]" style={{ color: filing.educationDedOverride !== undefined ? "var(--gold)" : "var(--ink-mute)" }}>
-                  {filing.educationDedOverride !== undefined
-                    ? `實際採用: ${fmt(toNum(filing.educationDedOverride))} (已覆寫)`
-                    : `若申報書沒列,改成 0`}
-                </span>
-              </div>
-              <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                ⓘ 教育學費資格:子女、孫子女**就讀大專以上院校**,每人 25,000(空大/五專前 3 年不適用)。
-                若你的小孩有勾「在學中」但實際不符資格(例如就讀高中),建議:
-                <br />· <b>方法 1</b>:回成員頁取消勾選「在學中」(永久,影響所有年度)
-                <br />· <b>方法 2</b>:在此手動輸入 0(只影響本次申報)
-              </div>
-            </div>
-          </details>
-        </div>
-      )}
-
-      {/* 列舉扣除額輸入 */}
-      <CollapsibleCard
-        title="② DEDUCTIONS · 一般扣除額"
-        defaultOpen={true}
-        headerExtra={
-          <div className="flex gap-1">
-            {["auto", "standard", "itemized"].map(c => (
-              <button key={c} onClick={() => onChange({ ...filing, deductionChoice: c })}
-                className={`px-3 py-1 text-xs rounded border ${filing.deductionChoice === c ? "" : ""}`}
-                style={{
-                  background: filing.deductionChoice === c ? "var(--ink)" : "white",
-                  color: filing.deductionChoice === c ? "white" : "var(--ink-soft)",
-                  borderColor: filing.deductionChoice === c ? "var(--ink)" : "var(--line)",
-                }}>
-                {c === "auto" ? "自動選最划算" : c === "standard" ? "強制標準" : "強制列舉"}
-              </button>
-            ))}
-          </div>
-        }
-      >
-        <div className="p-5">
-          {/* 申報書式表格:項目 / 實際發生 / 系統算可扣除 / 手動覆寫 */}
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
-                <th className="px-3 py-2 text-left text-xs font-medium" style={{ color: "var(--ink-mute)" }}>項目</th>
-                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>實際發生金額</th>
-                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>系統算可扣除</th>
-                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px", background: "#fef9ec" }}>手動覆寫</th>
-                <th className="px-3 py-2 text-left text-xs font-medium" style={{ color: "var(--ink-mute)" }}>備註</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(() => {
-                const rows = [
-                  {
-                    key: "donationGeneral", label: "對機關或團體之捐贈 (現金, ≤20%綜所)",
-                    actual: toNum(filing.itemizedDeductions.donationGeneral),
-                    auto: result.itemizedAuto?.donationGeneral || 0,
-                    actualField: "donationGeneral",
-                    note: () => {
-                      const cap = Math.round((result.grossIncomeForDonation || result.grossIncome) * 0.2);
-                      const actual = toNum(filing.itemizedDeductions.donationGeneral);
-                      if (actual > cap) return <span style={{ color: "var(--gold)" }}>已套 20% 上限 {fmt(cap)}</span>;
-                      return `上限 ${fmt(cap)}`;
-                    },
-                  },
-                  {
-                    key: "donationUnlimited", label: "對政府之捐贈 / 不限額捐贈",
-                    actual: toNum(filing.itemizedDeductions.donationUnlimited),
-                    auto: result.itemizedAuto?.donationUnlimited || 0,
-                    actualField: "donationUnlimited",
-                    note: () => "政府/國防/勞軍/古蹟修復,不限額",
-                  },
-                  {
-                    key: "insurancePersonal", label: "人身保險費 (非健保)",
-                    actual: toNum(filing.itemizedDeductions.insurancePersonal),
-                    auto: result.itemizedAuto?.insurancePersonal || 0,
-                    actualField: "insurancePersonal",
-                    note: () => {
-                      const hasPerMember = Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0;
-                      if (hasPerMember) return <span style={{ color: "var(--green)" }}>✓ 逐人輸入</span>;
-                      return `每人 ≤ 24k;申報戶上限 ${fmt(params.insuranceLimit * result.filers.length)}`;
-                    },
-                  },
-                  {
-                    key: "insuranceHealth", label: "人身保險費 - 健保 (含補充保費)",
-                    actual: toNum(filing.itemizedDeductions.insuranceHealth),
-                    auto: result.itemizedAuto?.insuranceHealth || 0,
-                    actualField: "insuranceHealth",
-                    note: () => "不限額",
-                  },
-                  {
-                    key: "medical", label: "醫藥及生育費",
-                    actual: toNum(filing.itemizedDeductions.medical),
-                    auto: result.itemizedAuto?.medical || 0,
-                    actualField: "medical",
-                    note: () => {
-                      const actual = toNum(filing.itemizedDeductions.medical);
-                      if (actual > 300000) return <span style={{ color: "var(--gold)" }}>⚠ 偏大,請核對</span>;
-                      return "不限額,須附收據";
-                    },
-                  },
-                  {
-                    key: "disaster", label: "災害損失",
-                    actual: toNum(filing.itemizedDeductions.disaster),
-                    auto: result.itemizedAuto?.disaster || 0,
-                    actualField: "disaster",
-                    note: () => "30 日內報國稅局",
-                  },
-                  {
-                    key: "mortgageInterest", label: "自用住宅購屋借款利息",
-                    actual: toNum(filing.itemizedDeductions.mortgageInterest),
-                    auto: result.itemizedAuto?.mortgageInterest || 0,
-                    actualField: "mortgageInterest",
-                    note: () => {
-                      const input = toNum(filing.itemizedDeductions.mortgageInterest);
-                      if (input === 0) return `一屋,實際 − 儲蓄扣除,上限 ${fmt(params.mortgageLimit)}`;
-                      if (input - result.savings > params.mortgageLimit) return <span style={{ color: "var(--gold)" }}>已套 30 萬上限</span>;
-                      return `實際 ${fmt(input)} − 儲蓄 ${fmt(result.savings)}`;
-                    },
-                  },
-                ];
-
-                return rows.map(r => {
-                  const overrideVal = filing.itemizedDeductions.overrides?.[r.key];
-                  const hasOverride = overrideVal !== undefined && overrideVal !== null && overrideVal !== "";
-                  const finalVal = hasOverride ? toNum(overrideVal) : r.auto;
-                  return (
-                    <tr key={r.key} style={{ borderBottom: "1px solid var(--line-soft)" }}>
-                      <td className="px-3 py-2 text-xs">{r.label}</td>
-                      <td className="px-2 py-1 text-right">
-                        <input type="number"
-                          className="input-text-plain text-sm w-full text-right num"
-                          placeholder="0"
-                          value={r.actual || ""}
-                          onChange={e => updateField(`itemizedDeductions.${r.actualField}`, Number(e.target.value) || 0)} />
-                      </td>
-                      <td className="px-3 py-2 text-right num text-sm" style={{ color: hasOverride ? "var(--ink-mute)" : "var(--accent-deep)", textDecoration: hasOverride ? "line-through" : "none" }}>
-                        {fmt(r.auto)}
-                      </td>
-                      <td className="px-2 py-1 text-right" style={{ background: "#fef9ec" }}>
-                        <input type="number"
-                          className="input-text-plain text-sm w-full text-right num"
-                          placeholder="留空 = 用系統"
-                          value={hasOverride ? overrideVal : ""}
-                          onChange={e => {
-                            const newOverrides = { ...(filing.itemizedDeductions.overrides || {}) };
-                            const v = e.target.value;
-                            if (v === "" || v === null) {
-                              delete newOverrides[r.key];
-                            } else {
-                              newOverrides[r.key] = Number(v) || 0;
-                            }
-                            updateField("itemizedDeductions.overrides", newOverrides);
-                          }} />
-                      </td>
-                      <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                        {typeof r.note === "function" ? r.note() : r.note}
-                      </td>
-                    </tr>
-                  );
-                });
-              })()}
-
-              {/* 合計列 */}
-              <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
-                <td className="px-3 py-2 font-medium text-sm">可扣除金額合計</td>
-                <td className="px-3 py-2 text-right num text-xs" style={{ color: "var(--ink-mute)" }}>
-                  {/* 實際發生合計 */}
-                  {fmt(
-                    toNum(filing.itemizedDeductions.donationGeneral) +
-                    toNum(filing.itemizedDeductions.donationUnlimited) +
-                    toNum(filing.itemizedDeductions.insurancePersonal) +
-                    toNum(filing.itemizedDeductions.insuranceHealth) +
-                    toNum(filing.itemizedDeductions.medical) +
-                    toNum(filing.itemizedDeductions.disaster) +
-                    toNum(filing.itemizedDeductions.mortgageInterest)
-                  )}
-                </td>
-                <td colSpan={2} className="px-3 py-2 text-right num font-medium" style={{ fontSize: "16px", color: "var(--accent-deep)" }}>
-                  {fmt(result.itemizedTotal)}
-                </td>
-                <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                  最終採用值
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* 自住房屋租金支出 (114 起改特扣,單獨欄位) */}
-          <div className="mt-4 p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
-            <div className="flex items-center gap-3">
-              <span className="text-xs" style={{ minWidth: "150px", color: "var(--ink-soft)" }}>自住房屋租金支出</span>
-              <input type="number"
-                className="input-text w-32 text-right text-sm"
-                placeholder="0"
-                value={filing.rentSupportPaid || ""}
-                onChange={e => onChange({ ...filing, rentSupportPaid: Number(e.target.value) || 0 })} />
-              <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                特扣 (114 起改特扣,上限 {fmt(params.rentDeduction)}),稅率 20% 以上不得扣
-              </span>
-            </div>
-          </div>
-
-          {/* 人身保險逐人輸入 (展開) — 從上方表格獨立出來放下面 */}
-          <div className="mt-4">
-            <details>
-              <summary className="text-xs cursor-pointer p-2 rounded" style={{ background: "#f5fbef", color: "var(--green)" }}>
-                ▸ 人身保險費 · 逐人輸入 (更精確,每人 &lt; 24k 只扣實際)
-              </summary>
-              <div className="mt-2 p-3 rounded space-y-1.5" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
-                <div className="text-[10px] mb-2" style={{ color: "var(--ink-mute)" }}>
-                  法規:每一被保險人 24,000 元;實際 &lt; 24,000 只能扣實際,不可互相分配。
-                  填了下方後,優先於上方「人身保險費」總額欄。
-                </div>
-                {result.filers.map(m => {
-                  const v = filing.itemizedDeductions.insurancePersonalByMember?.[m.id] || "";
-                  const num = toNum(v);
-                  const capped = Math.min(num, params.insuranceLimit);
-                  return (
-                    <div key={m.id} className="flex items-center gap-2">
-                      <span className="text-xs" style={{ minWidth: "70px" }}>{m.name}</span>
-                      <input type="number" className="input-text-plain text-xs w-24 text-right"
-                        value={v}
-                        placeholder="0"
-                        onChange={e => {
-                          const newMap = { ...(filing.itemizedDeductions.insurancePersonalByMember || {}) };
-                          const val = Number(e.target.value);
-                          if (val > 0) newMap[m.id] = val;
-                          else delete newMap[m.id];
-                          updateField("itemizedDeductions.insurancePersonalByMember", newMap);
-                        }} />
-                      <span className="text-[10px] num" style={{ color: num > params.insuranceLimit ? "var(--gold)" : "var(--ink-mute)" }}>
-                        {num > 0 ? `→ 扣 ${fmt(capped)}${num > params.insuranceLimit ? " (上限 24k)" : ""}` : ""}
-                      </span>
-                    </div>
-                  );
-                })}
-                <div className="text-xs pt-2 border-t mt-2" style={{ borderColor: "var(--line)", color: "var(--green)" }}>
-                  ✓ 逐人輸入合計: <b className="num">{fmt(
-                    Object.entries(filing.itemizedDeductions.insurancePersonalByMember || {})
-                      .reduce((s, [, v]) => s + Math.min(toNum(v), params.insuranceLimit), 0)
-                  )}</b>
-                  {Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0 &&
-                    <span className="ml-2 text-[10px]">(優先於上方總額)</span>
-                  }
-                </div>
-              </div>
-            </details>
-          </div>
-
-          {/* 標準 vs 列舉即時對比 */}
-          <div className="grid grid-cols-2 gap-3 mt-4">
-            <div className="p-3 rounded" style={{
-              background: result.useItemized ? "white" : "var(--green-soft)",
-              border: result.useItemized ? "1px solid var(--line)" : "2px solid var(--green)"
-            }}>
-              <div className="text-xs font-medium mb-1">標準扣除額 {!result.useItemized && "✓ 採用"}</div>
-              <div className="num font-serif text-xl">{fmt(result.standardDeduction)}</div>
-              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                {result.hasSpouse ? "夫妻合併 262,000" : "單身 131,000"}
-              </div>
-            </div>
-            <div className="p-3 rounded" style={{
-              background: result.useItemized ? "var(--green-soft)" : "white",
-              border: result.useItemized ? "2px solid var(--green)" : "1px solid var(--line)"
-            }}>
-              <div className="text-xs font-medium mb-1">列舉扣除額 {result.useItemized && "✓ 採用"}</div>
-              <div className="num font-serif text-xl">{fmt(result.itemizedTotal)}</div>
-              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                {result.itemizedTotal > result.standardDeduction
-                  ? `比標準多 ${fmt(result.itemizedTotal - result.standardDeduction)}`
-                  : `比標準少 ${fmt(result.standardDeduction - result.itemizedTotal)}`}
-              </div>
-            </div>
-          </div>
-
-          {/* 捐贈試算器 */}
-          <DonationSimulator
-            filing={filing}
-            result={result}
-            params={params}
-            onApplyDonation={delta => updateField("itemizedDeductions.donationGeneral",
-              toNum(filing.itemizedDeductions.donationGeneral) + delta)} />
-        </div>
-      </CollapsibleCard>
-
-      {/* ③ 抵減與已扣繳 */}
-      <CollapsibleCard
-        title="③ CREDITS · 稅額抵減與已扣繳"
-        subtitle="股利說明、已扣繳(自動)、重購自宅扣抵、其他抵減"
-        defaultOpen={false}
-      >
-        <div className="p-5 space-y-4">
-          {/* 已扣繳 (自動帶入,只讀) + 其他抵減 */}
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>已預扣繳稅額(自動)</label>
-              <div className="input-text w-full text-right num" style={{ background: "#fafaf6", color: "var(--green)" }}>
-                {fmt(result.prepaidTax || 0)}
-              </div>
-              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
-                自動從上方「📑 所得明細」的扣繳稅額合計
-                {(() => {
-                  const entriesTotal = (filing.incomeEntries || []).reduce((s, e) => s + toNum(e.withholding), 0);
-                  const manualPrepaid = toNum(filing.taxCredits?.prepaidTax);
-                  if (manualPrepaid > 0) return <> + 手動補加 {fmt(manualPrepaid)}</>;
-                  return null;
-                })()}
-              </div>
-              {/* 給有需要的人提供「手動補加」 — 收合 */}
-              <details className="mt-1">
-                <summary className="text-[10px] cursor-pointer" style={{ color: "var(--ink-mute)" }}>
-                  ▸ 需要手動補加(極罕見)
-                </summary>
-                <input type="number" className="input-text w-full text-right mt-1"
-                  value={filing.taxCredits?.prepaidTax || ""}
-                  placeholder="0"
-                  onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, prepaidTax: Number(e.target.value) || 0 } })} />
-                <div className="text-[10px] mt-1" style={{ color: "var(--ink-mute)" }}>
-                  扣繳憑單不在所得明細的(例:暫繳)
-                </div>
-              </details>
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>重購自用住宅退稅</label>
-              <input type="number" className="input-text w-full text-right"
-                value={filing.taxCredits?.repurchaseCredit || ""}
-                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, repurchaseCredit: Number(e.target.value) || 0 } })} />
-              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
-                2 年內重購自宅可申請的退稅
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>其他扣抵</label>
-              <input type="number" className="input-text w-full text-right"
-                value={filing.taxCredits?.otherCredit || ""}
-                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, otherCredit: Number(e.target.value) || 0 } })} />
-              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
-                投資抵減、大陸地區已納稅額等
-              </div>
-            </div>
-          </div>
-        </div>
-      </CollapsibleCard>
-
-      {/* ④ 計稅方式比較 (有 2+ 種方法時顯示,例如夫妻申報或有股利) */}
-      {result.taxMethods && result.taxMethods.length > 1 && (
-        <TaxMethodsPanel result={result} filing={filing} onChange={onChange} />
-      )}
-
-
-      {/* 結算申報書 (試算結果) */}
-      <OfficialFormView result={result} year={year} filing={filing} />
-
-      {/* ⑤ 實際結算與後續調整 */}
-      <SettlementPanel filing={filing} onChange={onChange} systemFinalDue={result.finalDue} />
-
       {/* 本戶租賃 — 合約自動攤分,每物件可展開查看與手動覆寫 */}
       {householdProperties.length > 0 && (
         <div className="card">
@@ -5185,7 +4649,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               <table className="w-full text-xs" style={{ minWidth: "600px" }}>
                 <thead>
                   <tr style={{ background: "white", borderBottom: "2px solid var(--ink-soft)" }}>
-                    <th className="text-center px-2 py-1.5 font-medium w-10" style={{ color: "var(--ink-mute)" }}>#</th>
                     <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>地址</th>
                     <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
                     <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>歸戶</th>
@@ -5296,7 +4759,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       <>
                         {rows.map((r, i) => (
                           <tr key={i} style={{ borderBottom: "1px solid var(--line-soft)" }}>
-                            <td className="text-center px-2 py-1.5 num text-[10px]" style={{ color: "var(--ink-mute)" }}>{r.propertySerial}</td>
                             <td className="px-2 py-1.5">
                               <div className="text-xs">{r.address || r.propertyName}</div>
                               <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>
@@ -5322,7 +4784,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                         ))}
                         {/* 合計列 */}
                         <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
-                          <td colSpan={4} className="text-right px-2 py-2 font-medium text-xs">
+                          <td colSpan={3} className="text-right px-2 py-2 font-medium text-xs">
                             合計({rows.length} 筆合約)
                           </td>
                           <td className="text-right px-2 py-2 num font-medium">
@@ -5407,7 +4869,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     ) : null}
                     <div className="flex-1">
                       <div className="flex items-baseline gap-2">
-                        {p.serial && <span className="chip chip-accent text-[10px] num">{p.serial}</span>}
                         <span className="font-serif text-base font-medium">{p.address || p.name}</span>
                         {p.assetType === "land" && (
                           <span className="chip text-[10px]" style={{ background: "#e8e2d5", color: "var(--ink)" }}>🌳 土地</span>
@@ -5780,6 +5241,543 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         </div>
       )}
 
+      {/* 各成員所得輸入 */}
+      <CollapsibleCard
+        title="① INCOME · 各成員所得"
+        defaultOpen={false}
+        headerExtra={incomeEntries.length > 0 && (
+          <div className="text-[10px]" style={{ color: "var(--green)" }}>
+            ✓ 自動從上方「逐筆所得明細」帶入,下方輸入框可額外補加
+          </div>
+        )}
+      >
+        <div className="p-5">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                <th className="text-left py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>成員</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>薪資</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>利息</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>租金 (自動)</th>
+                <th className="text-right py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>其他</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.filers.map(m => {
+                const income = filing.memberIncome?.[m.id] || {};
+                const myProps = householdProperties.filter(p => p.ownerId === m.id);
+                const myComputable = myProps.flatMap(p =>
+                  getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides));
+                const myRental = computeRentalIncome(myComputable, params);
+                const includedCount = myComputable.length;
+                // 從 entries 算這位成員的各類別所得
+                const memberEntries = incomeEntries.filter(e => e.ownerId === m.id);
+                const entrySum = (cat) => memberEntries
+                  .filter(e => e.category === cat)
+                  .reduce((s, e) => s + computeEntryNet(e), 0);
+                const fromEntriesSalary = entrySum("salary");
+                const fromEntriesInterest = entrySum("interest");
+                const fromEntriesDividend = entrySum("dividend");
+                const fromEntriesOther = entrySum("executive") + entrySum("other");
+                const showEntryHint = (val) => val > 0
+                  ? <div className="text-[10px]" style={{ color: "var(--green)" }}>📑 +{fmt(val)}</div>
+                  : null;
+                return (
+                  <tr key={m.id} className="table-row align-top">
+                    <td className="py-2 font-medium">
+                      {m.name}
+                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                        {m.id === filing.taxpayerId ? "本人" : (m.id === filing.spouseId ? "配偶" : "扶養")}
+                      </div>
+                    </td>
+                    <td className="py-2 text-right">
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesSalary}
+                        manualValue={toNum(income.salary)}
+                        onChangeManual={v => updateIncome(m.id, "salary", v)}
+                        width="w-28"
+                      />
+                    </td>
+                    <td className="py-2 text-right">
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesInterest}
+                        manualValue={toNum(income.interest)}
+                        onChangeManual={v => updateIncome(m.id, "interest", v)}
+                        width="w-24"
+                      />
+                    </td>
+                    <td className="py-2 text-right">
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesDividend}
+                        manualValue={toNum(income.dividend)}
+                        onChangeManual={v => updateIncome(m.id, "dividend", v)}
+                        width="w-24"
+                      />
+                    </td>
+                    <td className="py-2 text-right num text-xs" title={myComputable.map(p => p.name).join(", ")}>
+                      {fmt(myRental.taxable)}
+                      {myProps.length > 0 && <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                        計入 {includedCount}/{myProps.length} 物件
+                      </div>}
+                    </td>
+                    <td className="py-2 text-right">
+                      <CombinedIncomeCell
+                        entriesValue={fromEntriesOther}
+                        manualValue={toNum(income.other)}
+                        onChangeManual={v => updateIncome(m.id, "other", v)}
+                        width="w-24"
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="divider-double" style={{ background: "#fafaf6" }}>
+                <td className="py-3 font-medium">總計</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.salaryGross)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.interest)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.dividend)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.rentalTaxable)}</td>
+                <td className="py-3 text-right num font-medium">{fmt(result.otherIncome)}</td>
+              </tr>
+            </tfoot>
+          </table>
+
+          {/* 儲蓄投資特別扣除額提示 */}
+          <div className="mt-4 p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <div className="text-xs font-medium mb-1" style={{ color: "var(--ink-soft)" }}>
+                  ⓘ 儲蓄投資特別扣除額 (從利息自動計算)
+                </div>
+                {result.hasInterestEntries ? (
+                  // 有逐筆明細時:顯示 5A vs 全部利息的拆分
+                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                    <div className="num">
+                      ✓ 5A 金融機構利息: <span style={{ color: "var(--green)" }}>{fmt(result.interest5A)}</span> → 可享儲蓄扣除
+                    </div>
+                    {result.has5BEntries && (
+                      <div className="num mt-0.5">
+                        ✗ 5B 非金融機構利息: <span style={{ color: "var(--gold)" }}>{fmt((result.interest || 0) - (result.interest5A || 0))}</span> → 不可扣 (保險/證券公司等)
+                      </div>
+                    )}
+                    <div className="mt-1">
+                      系統採用 5A 部分 = min({fmt(result.interest5A)}, {fmt(params.savingsDeduction)}) = <b>{fmt(result.savingsAuto)}</b>
+                    </div>
+                  </div>
+                ) : (
+                  // 沒明細時:沿用舊邏輯提示
+                  <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                    系統自動套用 = min(全戶利息, {fmt(params.savingsDeduction)})。
+                    <br />
+                    ⚠ 若你的利息包含郵局存簿、公債、公司債、保險公司利息(5B)等<b>不適用</b>項目,請改用「📑 所得明細逐筆輸入」並區分 5A / 5B,系統會自動排除不適用利息。
+                  </div>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-xs" style={{ color: "var(--ink-mute)" }}>實際採用</div>
+                <div className="font-serif text-2xl num" style={{ color: "var(--accent-deep)" }}>
+                  {fmt(result.savings)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </CollapsibleCard>
+
+      {/* 特別扣除額覆寫 (教育/幼兒/長照/身障) — 罕用,僅在實際與系統不符時使用 */}
+      {(result.educationDedAuto > 0 || result.preschoolDed > 0 || result.longTermCareDed > 0 || result.disabilityDed > 0
+        || filing.educationDedOverride !== undefined) && (
+        <div className="card">
+          <details>
+            <summary className="px-5 py-3 cursor-pointer text-sm font-medium" style={{ borderBottom: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+              ▸ 特別扣除額覆寫(教育學費等) <span className="text-xs ml-2" style={{ color: "var(--ink-mute)" }}>(申報書與系統不符時使用)</span>
+            </summary>
+            <div className="p-5 space-y-3 text-sm">
+              {/* 教育學費 */}
+              <div className="flex items-center gap-3">
+                <span style={{ minWidth: "100px", color: "var(--ink-soft)" }}>教育學費特扣</span>
+                <div className="num" style={{ minWidth: "80px", color: "var(--ink-mute)" }}>
+                  系統算: {fmt(result.educationDedAuto || 0)}
+                  {result.studentCount > 0 && (
+                    <span className="text-[10px] ml-1">({result.studentCount} 位在學)</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input type="number"
+                    className="input-text w-24 text-right text-sm"
+                    placeholder="覆寫"
+                    value={filing.educationDedOverride !== undefined && filing.educationDedOverride !== null ? filing.educationDedOverride : ""}
+                    onChange={e => {
+                      const v = e.target.value;
+                      onChange({ ...filing, educationDedOverride: v === "" ? undefined : Number(v) });
+                    }} />
+                  {filing.educationDedOverride !== undefined && filing.educationDedOverride !== null && (
+                    <button className="text-[10px] hover:underline" style={{ color: "var(--ink-mute)" }}
+                      onClick={() => onChange({ ...filing, educationDedOverride: undefined })}>
+                      ↻ 還原
+                    </button>
+                  )}
+                </div>
+                <span className="text-[10px]" style={{ color: filing.educationDedOverride !== undefined ? "var(--gold)" : "var(--ink-mute)" }}>
+                  {filing.educationDedOverride !== undefined
+                    ? `實際採用: ${fmt(toNum(filing.educationDedOverride))} (已覆寫)`
+                    : `若申報書沒列,改成 0`}
+                </span>
+              </div>
+              <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                ⓘ 教育學費資格:子女、孫子女**就讀大專以上院校**,每人 25,000(空大/五專前 3 年不適用)。
+                若你的小孩有勾「在學中」但實際不符資格(例如就讀高中),建議:
+                <br />· <b>方法 1</b>:回成員頁取消勾選「在學中」(永久,影響所有年度)
+                <br />· <b>方法 2</b>:在此手動輸入 0(只影響本次申報)
+              </div>
+            </div>
+          </details>
+        </div>
+      )}
+
+      {/* 列舉扣除額輸入 */}
+      <CollapsibleCard
+        title="② DEDUCTIONS · 一般扣除額"
+        defaultOpen={false}
+        headerExtra={
+          <div className="flex gap-1">
+            {["auto", "standard", "itemized"].map(c => (
+              <button key={c} onClick={() => onChange({ ...filing, deductionChoice: c })}
+                className={`px-3 py-1 text-xs rounded border ${filing.deductionChoice === c ? "" : ""}`}
+                style={{
+                  background: filing.deductionChoice === c ? "var(--ink)" : "white",
+                  color: filing.deductionChoice === c ? "white" : "var(--ink-soft)",
+                  borderColor: filing.deductionChoice === c ? "var(--ink)" : "var(--line)",
+                }}>
+                {c === "auto" ? "自動選最划算" : c === "standard" ? "強制標準" : "強制列舉"}
+              </button>
+            ))}
+          </div>
+        }
+      >
+        <div className="p-5">
+          {/* 申報書式表格:項目 / 實際發生 / 系統算可扣除 / 手動覆寫 */}
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
+                <th className="px-3 py-2 text-left text-xs font-medium" style={{ color: "var(--ink-mute)" }}>項目</th>
+                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>實際發生金額</th>
+                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>系統算可扣除</th>
+                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px", background: "#fef9ec" }}>手動覆寫</th>
+                <th className="px-3 py-2 text-left text-xs font-medium" style={{ color: "var(--ink-mute)" }}>備註</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                const rows = [
+                  {
+                    key: "donationGeneral", label: "對機關或團體之捐贈 (現金, ≤20%綜所)",
+                    actual: toNum(filing.itemizedDeductions.donationGeneral),
+                    auto: result.itemizedAuto?.donationGeneral || 0,
+                    actualField: "donationGeneral",
+                    note: () => {
+                      const cap = Math.round((result.grossIncomeForDonation || result.grossIncome) * 0.2);
+                      const actual = toNum(filing.itemizedDeductions.donationGeneral);
+                      if (actual > cap) return <span style={{ color: "var(--gold)" }}>已套 20% 上限 {fmt(cap)}</span>;
+                      return `上限 ${fmt(cap)}`;
+                    },
+                  },
+                  {
+                    key: "donationUnlimited", label: "對政府之捐贈 / 不限額捐贈",
+                    actual: toNum(filing.itemizedDeductions.donationUnlimited),
+                    auto: result.itemizedAuto?.donationUnlimited || 0,
+                    actualField: "donationUnlimited",
+                    note: () => "政府/國防/勞軍/古蹟修復,不限額",
+                  },
+                  {
+                    key: "insurancePersonal", label: "人身保險費 (非健保)",
+                    actual: toNum(filing.itemizedDeductions.insurancePersonal),
+                    auto: result.itemizedAuto?.insurancePersonal || 0,
+                    actualField: "insurancePersonal",
+                    note: () => {
+                      const hasPerMember = Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0;
+                      if (hasPerMember) return <span style={{ color: "var(--green)" }}>✓ 逐人輸入</span>;
+                      return `每人 ≤ 24k;申報戶上限 ${fmt(params.insuranceLimit * result.filers.length)}`;
+                    },
+                  },
+                  {
+                    key: "insuranceHealth", label: "人身保險費 - 健保 (含補充保費)",
+                    actual: toNum(filing.itemizedDeductions.insuranceHealth),
+                    auto: result.itemizedAuto?.insuranceHealth || 0,
+                    actualField: "insuranceHealth",
+                    note: () => "不限額",
+                  },
+                  {
+                    key: "medical", label: "醫藥及生育費",
+                    actual: toNum(filing.itemizedDeductions.medical),
+                    auto: result.itemizedAuto?.medical || 0,
+                    actualField: "medical",
+                    note: () => {
+                      const actual = toNum(filing.itemizedDeductions.medical);
+                      if (actual > 300000) return <span style={{ color: "var(--gold)" }}>⚠ 偏大,請核對</span>;
+                      return "不限額,須附收據";
+                    },
+                  },
+                  {
+                    key: "disaster", label: "災害損失",
+                    actual: toNum(filing.itemizedDeductions.disaster),
+                    auto: result.itemizedAuto?.disaster || 0,
+                    actualField: "disaster",
+                    note: () => "30 日內報國稅局",
+                  },
+                  {
+                    key: "mortgageInterest", label: "自用住宅購屋借款利息",
+                    actual: toNum(filing.itemizedDeductions.mortgageInterest),
+                    auto: result.itemizedAuto?.mortgageInterest || 0,
+                    actualField: "mortgageInterest",
+                    note: () => {
+                      const input = toNum(filing.itemizedDeductions.mortgageInterest);
+                      if (input === 0) return `一屋,實際 − 儲蓄扣除,上限 ${fmt(params.mortgageLimit)}`;
+                      if (input - result.savings > params.mortgageLimit) return <span style={{ color: "var(--gold)" }}>已套 30 萬上限</span>;
+                      return `實際 ${fmt(input)} − 儲蓄 ${fmt(result.savings)}`;
+                    },
+                  },
+                ];
+
+                return rows.map(r => {
+                  const overrideVal = filing.itemizedDeductions.overrides?.[r.key];
+                  const hasOverride = overrideVal !== undefined && overrideVal !== null && overrideVal !== "";
+                  const finalVal = hasOverride ? toNum(overrideVal) : r.auto;
+                  return (
+                    <tr key={r.key} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                      <td className="px-3 py-2 text-xs">{r.label}</td>
+                      <td className="px-2 py-1 text-right">
+                        <input type="number"
+                          className="input-text-plain text-sm w-full text-right num"
+                          placeholder="0"
+                          value={r.actual || ""}
+                          onChange={e => updateField(`itemizedDeductions.${r.actualField}`, Number(e.target.value) || 0)} />
+                      </td>
+                      <td className="px-3 py-2 text-right num text-sm" style={{ color: hasOverride ? "var(--ink-mute)" : "var(--accent-deep)", textDecoration: hasOverride ? "line-through" : "none" }}>
+                        {fmt(r.auto)}
+                      </td>
+                      <td className="px-2 py-1 text-right" style={{ background: "#fef9ec" }}>
+                        <input type="number"
+                          className="input-text-plain text-sm w-full text-right num"
+                          placeholder="留空 = 用系統"
+                          value={hasOverride ? overrideVal : ""}
+                          onChange={e => {
+                            const newOverrides = { ...(filing.itemizedDeductions.overrides || {}) };
+                            const v = e.target.value;
+                            if (v === "" || v === null) {
+                              delete newOverrides[r.key];
+                            } else {
+                              newOverrides[r.key] = Number(v) || 0;
+                            }
+                            updateField("itemizedDeductions.overrides", newOverrides);
+                          }} />
+                      </td>
+                      <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                        {typeof r.note === "function" ? r.note() : r.note}
+                      </td>
+                    </tr>
+                  );
+                });
+              })()}
+
+              {/* 合計列 */}
+              <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
+                <td className="px-3 py-2 font-medium text-sm">可扣除金額合計</td>
+                <td className="px-3 py-2 text-right num text-xs" style={{ color: "var(--ink-mute)" }}>
+                  {/* 實際發生合計 */}
+                  {fmt(
+                    toNum(filing.itemizedDeductions.donationGeneral) +
+                    toNum(filing.itemizedDeductions.donationUnlimited) +
+                    toNum(filing.itemizedDeductions.insurancePersonal) +
+                    toNum(filing.itemizedDeductions.insuranceHealth) +
+                    toNum(filing.itemizedDeductions.medical) +
+                    toNum(filing.itemizedDeductions.disaster) +
+                    toNum(filing.itemizedDeductions.mortgageInterest)
+                  )}
+                </td>
+                <td colSpan={2} className="px-3 py-2 text-right num font-medium" style={{ fontSize: "16px", color: "var(--accent-deep)" }}>
+                  {fmt(result.itemizedTotal)}
+                </td>
+                <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                  最終採用值
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* 自住房屋租金支出 (114 起改特扣,單獨欄位) */}
+          <div className="mt-4 p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <div className="flex items-center gap-3">
+              <span className="text-xs" style={{ minWidth: "150px", color: "var(--ink-soft)" }}>自住房屋租金支出</span>
+              <input type="number"
+                className="input-text w-32 text-right text-sm"
+                placeholder="0"
+                value={filing.rentSupportPaid || ""}
+                onChange={e => onChange({ ...filing, rentSupportPaid: Number(e.target.value) || 0 })} />
+              <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                特扣 (114 起改特扣,上限 {fmt(params.rentDeduction)}),稅率 20% 以上不得扣
+              </span>
+            </div>
+          </div>
+
+          {/* 人身保險逐人輸入 (展開) — 從上方表格獨立出來放下面 */}
+          <div className="mt-4">
+            <details>
+              <summary className="text-xs cursor-pointer p-2 rounded" style={{ background: "#f5fbef", color: "var(--green)" }}>
+                ▸ 人身保險費 · 逐人輸入 (更精確,每人 &lt; 24k 只扣實際)
+              </summary>
+              <div className="mt-2 p-3 rounded space-y-1.5" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                <div className="text-[10px] mb-2" style={{ color: "var(--ink-mute)" }}>
+                  法規:每一被保險人 24,000 元;實際 &lt; 24,000 只能扣實際,不可互相分配。
+                  填了下方後,優先於上方「人身保險費」總額欄。
+                </div>
+                {result.filers.map(m => {
+                  const v = filing.itemizedDeductions.insurancePersonalByMember?.[m.id] || "";
+                  const num = toNum(v);
+                  const capped = Math.min(num, params.insuranceLimit);
+                  return (
+                    <div key={m.id} className="flex items-center gap-2">
+                      <span className="text-xs" style={{ minWidth: "70px" }}>{m.name}</span>
+                      <input type="number" className="input-text-plain text-xs w-24 text-right"
+                        value={v}
+                        placeholder="0"
+                        onChange={e => {
+                          const newMap = { ...(filing.itemizedDeductions.insurancePersonalByMember || {}) };
+                          const val = Number(e.target.value);
+                          if (val > 0) newMap[m.id] = val;
+                          else delete newMap[m.id];
+                          updateField("itemizedDeductions.insurancePersonalByMember", newMap);
+                        }} />
+                      <span className="text-[10px] num" style={{ color: num > params.insuranceLimit ? "var(--gold)" : "var(--ink-mute)" }}>
+                        {num > 0 ? `→ 扣 ${fmt(capped)}${num > params.insuranceLimit ? " (上限 24k)" : ""}` : ""}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div className="text-xs pt-2 border-t mt-2" style={{ borderColor: "var(--line)", color: "var(--green)" }}>
+                  ✓ 逐人輸入合計: <b className="num">{fmt(
+                    Object.entries(filing.itemizedDeductions.insurancePersonalByMember || {})
+                      .reduce((s, [, v]) => s + Math.min(toNum(v), params.insuranceLimit), 0)
+                  )}</b>
+                  {Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0 &&
+                    <span className="ml-2 text-[10px]">(優先於上方總額)</span>
+                  }
+                </div>
+              </div>
+            </details>
+          </div>
+
+          {/* 標準 vs 列舉即時對比 */}
+          <div className="grid grid-cols-2 gap-3 mt-4">
+            <div className="p-3 rounded" style={{
+              background: result.useItemized ? "white" : "var(--green-soft)",
+              border: result.useItemized ? "1px solid var(--line)" : "2px solid var(--green)"
+            }}>
+              <div className="text-xs font-medium mb-1">標準扣除額 {!result.useItemized && "✓ 採用"}</div>
+              <div className="num font-serif text-xl">{fmt(result.standardDeduction)}</div>
+              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                {result.hasSpouse ? "夫妻合併 262,000" : "單身 131,000"}
+              </div>
+            </div>
+            <div className="p-3 rounded" style={{
+              background: result.useItemized ? "var(--green-soft)" : "white",
+              border: result.useItemized ? "2px solid var(--green)" : "1px solid var(--line)"
+            }}>
+              <div className="text-xs font-medium mb-1">列舉扣除額 {result.useItemized && "✓ 採用"}</div>
+              <div className="num font-serif text-xl">{fmt(result.itemizedTotal)}</div>
+              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                {result.itemizedTotal > result.standardDeduction
+                  ? `比標準多 ${fmt(result.itemizedTotal - result.standardDeduction)}`
+                  : `比標準少 ${fmt(result.standardDeduction - result.itemizedTotal)}`}
+              </div>
+            </div>
+          </div>
+
+          {/* 捐贈試算器 */}
+          <DonationSimulator
+            filing={filing}
+            result={result}
+            params={params}
+            onApplyDonation={delta => updateField("itemizedDeductions.donationGeneral",
+              toNum(filing.itemizedDeductions.donationGeneral) + delta)} />
+        </div>
+      </CollapsibleCard>
+
+      {/* ③ 抵減與已扣繳 */}
+      <CollapsibleCard
+        title="③ CREDITS · 稅額抵減與已扣繳"
+        subtitle="股利說明、已扣繳(自動)、重購自宅扣抵、其他抵減"
+        defaultOpen={false}
+      >
+        <div className="p-5 space-y-4">
+          {/* 已扣繳 (自動帶入,只讀) + 其他抵減 */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>已預扣繳稅額(自動)</label>
+              <div className="input-text w-full text-right num" style={{ background: "#fafaf6", color: "var(--green)" }}>
+                {fmt(result.prepaidTax || 0)}
+              </div>
+              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+                自動從上方「📑 所得明細」的扣繳稅額合計
+                {(() => {
+                  const entriesTotal = (filing.incomeEntries || []).reduce((s, e) => s + toNum(e.withholding), 0);
+                  const manualPrepaid = toNum(filing.taxCredits?.prepaidTax);
+                  if (manualPrepaid > 0) return <> + 手動補加 {fmt(manualPrepaid)}</>;
+                  return null;
+                })()}
+              </div>
+              {/* 給有需要的人提供「手動補加」 — 收合 */}
+              <details className="mt-1">
+                <summary className="text-[10px] cursor-pointer" style={{ color: "var(--ink-mute)" }}>
+                  ▸ 需要手動補加(極罕見)
+                </summary>
+                <input type="number" className="input-text w-full text-right mt-1"
+                  value={filing.taxCredits?.prepaidTax || ""}
+                  placeholder="0"
+                  onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, prepaidTax: Number(e.target.value) || 0 } })} />
+                <div className="text-[10px] mt-1" style={{ color: "var(--ink-mute)" }}>
+                  扣繳憑單不在所得明細的(例:暫繳)
+                </div>
+              </details>
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>重購自用住宅退稅</label>
+              <input type="number" className="input-text w-full text-right"
+                value={filing.taxCredits?.repurchaseCredit || ""}
+                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, repurchaseCredit: Number(e.target.value) || 0 } })} />
+              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+                2 年內重購自宅可申請的退稅
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>其他扣抵</label>
+              <input type="number" className="input-text w-full text-right"
+                value={filing.taxCredits?.otherCredit || ""}
+                onChange={e => onChange({ ...filing, taxCredits: { ...filing.taxCredits, otherCredit: Number(e.target.value) || 0 } })} />
+              <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>
+                投資抵減、大陸地區已納稅額等
+              </div>
+            </div>
+          </div>
+        </div>
+      </CollapsibleCard>
+
+      {/* ④ 計稅方式比較 (有 2+ 種方法時顯示,例如夫妻申報或有股利) */}
+      {result.taxMethods && result.taxMethods.length > 1 && (
+        <TaxMethodsPanel result={result} filing={filing} onChange={onChange} />
+      )}
+
+
+      {/* 結算申報書 (試算結果) */}
+      <OfficialFormView result={result} year={year} filing={filing} />
+
+      {/* ⑤ 實際結算與後續調整 */}
+      <SettlementPanel filing={filing} onChange={onChange} systemFinalDue={result.finalDue} />
+
+
       {/* 新增物件 Modal */}
       {newPropertyModal && (
         <PropertyModal
@@ -5992,7 +5990,7 @@ function SettlementPanel({ filing, onChange, systemFinalDue }) {
     return s + v;
   }, 0);
 
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [collapsed, setCollapsed] = React.useState(true);
 
   return (
     <div className="card">
@@ -6246,7 +6244,7 @@ function DeductionInput({ label, hint, value, onChange }) {
 function TaxMethodsPanel({ result, filing, onChange }) {
   const allMethods = result.taxMethods;
   const isAuto = (filing.taxMethod || "auto") === "auto";
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [collapsed, setCollapsed] = React.useState(true);
   // 預設只顯示「股利合併」(A 變體);打勾才顯示「股利分開 28%」(B 變體)
   const allBest = result.bestMethod;
   const chosen = result.chosenMethod;
@@ -6915,7 +6913,7 @@ function OfficialFormView({ result, year, filing }) {
   const itemizedDeductions = filing.itemizedDeductions || {};
   // 為了在「綜合所得總額」旁顯示 sub 提示
   const grossSub = salarySD > 0 ? `薪資 ${fmt(grossIncomeRaw)} − 薪資特扣 ${fmt(salarySD)}` : null;
-  const [officialCollapsed, setOfficialCollapsed] = React.useState(false);
+  const [officialCollapsed, setOfficialCollapsed] = React.useState(true);
 
   return (
     <div className="card mb-4" style={{ background: "white", border: "2px solid #c53030" }}>
