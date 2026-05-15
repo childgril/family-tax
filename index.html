@@ -1258,18 +1258,29 @@ function computeTaxForFiling(filing, members, year) {
   const savings = filing.savingsOverride
     ? Math.min(Math.max(0, toNum(filing.savingsOverrideAmount)), params.savingsDeduction)
     : savingsAuto;
-  const disabilityDed = disabilityCount * params.disabilityDeduction;
+  // 身障特別扣除:預設按 isDisabled × params;允許手動覆寫
+  const disabilityDedAuto = disabilityCount * params.disabilityDeduction;
+  const disabilityDed = filing.disabilityDedOverride !== undefined && filing.disabilityDedOverride !== null && filing.disabilityDedOverride !== ""
+    ? toNum(filing.disabilityDedOverride)
+    : disabilityDedAuto;
   // 教育學費: 預設按 isStudent 子女算 25,000 × 人數;允許手動覆寫 (例: 申報書沒列)
   const educationDedAuto = Math.min(studentCount, filers.length) * params.educationDeduction;
   const educationDed = filing.educationDedOverride !== undefined && filing.educationDedOverride !== null && filing.educationDedOverride !== ""
     ? toNum(filing.educationDedOverride)
     : educationDedAuto;
   // 幼兒學前: 第一名定額,第二名以上提高 (依 114 年制度)
-  let preschoolDed = 0;
+  let preschoolDedAuto = 0;
   if (preschoolCount > 0) {
-    preschoolDed = params.preschoolFirst + Math.max(0, preschoolCount - 1) * params.preschoolOther;
+    preschoolDedAuto = params.preschoolFirst + Math.max(0, preschoolCount - 1) * params.preschoolOther;
   }
-  const longTermCareDed = longTermCareCount * params.longTermCare;
+  const preschoolDed = filing.preschoolDedOverride !== undefined && filing.preschoolDedOverride !== null && filing.preschoolDedOverride !== ""
+    ? toNum(filing.preschoolDedOverride)
+    : preschoolDedAuto;
+  // 長照
+  const longTermCareDedAuto = longTermCareCount * params.longTermCare;
+  const longTermCareDed = filing.longTermCareDedOverride !== undefined && filing.longTermCareDedOverride !== null && filing.longTermCareDedOverride !== ""
+    ? toNum(filing.longTermCareDedOverride)
+    : longTermCareDedAuto;
 
   // 薪資扣除額
   const salarySD = salaryDeductible;
@@ -1397,11 +1408,17 @@ function computeTaxForFiling(filing, members, year) {
     }),
     generalDeduction: generalDeductionActual,
     disabilityDed,
+    disabilityDedAuto,
+    disabilityCount,
     educationDed,
     educationDedAuto,
     studentCount,
     preschoolDed,
+    preschoolDedAuto,
+    preschoolCount,
     longTermCareDed,
+    longTermCareDedAuto,
+    longTermCareCount,
     rentDeductActual,
     blDiff,
     savings,
@@ -6606,7 +6623,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
 
       {/* 結算申報書 (試算結果) */}
-      <OfficialFormView result={result} year={year} filing={filing} />
+      <OfficialFormView result={result} year={year} filing={filing} onChange={onChange} />
 
       {/* ⑤ 實際結算與後續調整 */}
       <SettlementPanel filing={filing} onChange={onChange} systemFinalDue={result.finalDue} />
@@ -7931,7 +7948,47 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
   );
 }
 
-function OfficialFormView({ result, year, filing }) {
+function DeductionOverrideInput({ autoValue, overrideValue, currentValue, onChange }) {
+  const hasOverride = overrideValue !== undefined && overrideValue !== null && overrideValue !== "";
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <input
+        type="text"
+        inputMode="numeric"
+        className="text-right text-sm num px-2 py-1 rounded w-28"
+        style={{
+          background: hasOverride ? "#fef9ec" : "transparent",
+          border: hasOverride ? "1px dashed var(--gold)" : "1px dashed transparent",
+          color: hasOverride ? "var(--gold)" : "var(--ink)",
+        }}
+        defaultValue={hasOverride ? String(overrideValue) : String(currentValue)}
+        key={`${hasOverride}_${overrideValue}_${currentValue}`}
+        placeholder={fmt(autoValue)}
+        onChange={e => {
+          const v = e.target.value.replace(/[^\d-]/g, "");
+          if (v === "") {
+            onChange(undefined);
+          } else if (toNum(v) === autoValue && !hasOverride) {
+            // 沒 override 且 value 等於 auto:不變
+          } else {
+            onChange(v);
+          }
+        }}
+        title="點擊修改 (留空會還原為自動)"
+      />
+      {hasOverride && (
+        <button
+          className="text-[10px] hover:underline px-1"
+          style={{ color: "var(--ink-mute)" }}
+          onClick={() => onChange(undefined)}
+          title={`還原為自動值 ${fmt(autoValue)}`}
+        >↻</button>
+      )}
+    </div>
+  );
+}
+
+function OfficialFormView({ result, year, filing, onChange }) {
   if (!result || !result.params) return null;
   // 拿關鍵數字 (全部加 || 0 防 undefined)
   // ⚠ 注意:官方申報書「綜合所得總額」是「薪資扣特扣後」,而系統內 grossIncome 是「未扣前」
@@ -8366,25 +8423,92 @@ function OfficialFormView({ result, year, filing }) {
                   3. 儲蓄投資特別扣除額
                   <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
                     全戶利息 {fmt(interest)} (上限 {fmt(result.params.savingsDeduction)})
+                    {filing.savingsOverride && <span className="ml-1" style={{ color: "var(--gold)" }}>✎ 手動</span>}
                   </div>
                 </td>
-                <td className="px-3 py-2 text-right">{fmt(savings)}</td>
+                <td className="px-3 py-2 text-right">
+                  <DeductionOverrideInput
+                    autoValue={result.savingsAuto || 0}
+                    overrideValue={filing.savingsOverride ? filing.savingsOverrideAmount : undefined}
+                    currentValue={result.savings || 0}
+                    onChange={(val) => {
+                      if (val === undefined) {
+                        // 還原為自動
+                        onChange({ ...filing, savingsOverride: false, savingsOverrideAmount: "" });
+                      } else {
+                        onChange({ ...filing, savingsOverride: true, savingsOverrideAmount: val });
+                      }
+                    }}
+                  />
+                </td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                <td className="px-3 py-2">4. 身心障礙特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.disabilityDed || 0)}</td>
+                <td className="px-3 py-2">
+                  4. 身心障礙特別扣除額
+                  <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                    {result.disabilityCount || 0} 人 × {fmt(result.params.disabilityDeduction)}
+                    {filing.disabilityDedOverride !== undefined && filing.disabilityDedOverride !== "" && <span className="ml-1" style={{ color: "var(--gold)" }}>✎ 手動</span>}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <DeductionOverrideInput
+                    autoValue={result.disabilityDedAuto || 0}
+                    overrideValue={filing.disabilityDedOverride}
+                    currentValue={result.disabilityDed || 0}
+                    onChange={(val) => onChange({ ...filing, disabilityDedOverride: val === undefined ? "" : val })}
+                  />
+                </td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                <td className="px-3 py-2">5. 教育學費特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.educationDed || 0)}</td>
+                <td className="px-3 py-2">
+                  5. 教育學費特別扣除額
+                  <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                    {result.studentCount || 0} 人 × {fmt(result.params.educationDeduction)}
+                    {filing.educationDedOverride !== undefined && filing.educationDedOverride !== "" && <span className="ml-1" style={{ color: "var(--gold)" }}>✎ 手動</span>}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <DeductionOverrideInput
+                    autoValue={result.educationDedAuto || 0}
+                    overrideValue={filing.educationDedOverride}
+                    currentValue={result.educationDed || 0}
+                    onChange={(val) => onChange({ ...filing, educationDedOverride: val === undefined ? "" : val })}
+                  />
+                </td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                <td className="px-3 py-2">6. 幼兒學前特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.preschoolDed || 0)}</td>
+                <td className="px-3 py-2">
+                  6. 幼兒學前特別扣除額
+                  <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                    {result.preschoolCount || 0} 名 6 歲以下子女 (自動算 {fmt(result.preschoolDedAuto || 0)})
+                    {filing.preschoolDedOverride !== undefined && filing.preschoolDedOverride !== "" && <span className="ml-1" style={{ color: "var(--gold)" }}>✎ 手動</span>}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <DeductionOverrideInput
+                    autoValue={result.preschoolDedAuto || 0}
+                    overrideValue={filing.preschoolDedOverride}
+                    currentValue={result.preschoolDed || 0}
+                    onChange={(val) => onChange({ ...filing, preschoolDedOverride: val === undefined ? "" : val })}
+                  />
+                </td>
               </tr>
               <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                <td className="px-3 py-2">7. 長期照顧特別扣除額</td>
-                <td className="px-3 py-2 text-right">{fmt(result.longTermCareDed || 0)}</td>
+                <td className="px-3 py-2">
+                  7. 長期照顧特別扣除額
+                  <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                    {result.longTermCareCount || 0} 人 × {fmt(result.params.longTermCare)}
+                    {filing.longTermCareDedOverride !== undefined && filing.longTermCareDedOverride !== "" && <span className="ml-1" style={{ color: "var(--gold)" }}>✎ 手動</span>}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <DeductionOverrideInput
+                    autoValue={result.longTermCareDedAuto || 0}
+                    overrideValue={filing.longTermCareDedOverride}
+                    currentValue={result.longTermCareDed || 0}
+                    onChange={(val) => onChange({ ...filing, longTermCareDedOverride: val === undefined ? "" : val })}
+                  />
+                </td>
               </tr>
               {year >= 114 && (
                 <tr style={{ borderBottom: "1px solid var(--line)" }}>
