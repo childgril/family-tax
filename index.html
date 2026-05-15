@@ -4313,6 +4313,8 @@ function FilingPage({ data, setData, year, setPage }) {
 
 function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, year, onChange, onDelete }) {
   const [newPropertyModal, setNewPropertyModal] = React.useState(null); // 新增物件 modal
+  const [rentalExpandKey, setRentalExpandKey] = React.useState(0); // 強制 re-render 用
+  const [rentalForceState, setRentalForceState] = React.useState(null); // null=用預設 / true=全展開 / false=全收合
   // 把 properties 過濾出屬於這申報戶的人持有的
   const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
   const householdProperties = properties.filter(p => filerIds.includes(p.ownerId));
@@ -5111,8 +5113,43 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         <div className="card">
           <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
             <div className="ornament">⑥ RENTAL RECORDS · 本戶 {year} 年度租賃紀錄</div>
-            <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
-              依合約自動攤分,可勾選計入 / 手動覆寫金額
+            <div className="flex items-center gap-2">
+              <button
+                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
+                style={{ color: "var(--ink-soft)", border: "1px solid var(--line)" }}
+                onClick={() => {
+                  setRentalForceState(false);
+                  setRentalExpandKey(k => k + 1);
+                }}
+                title="把所有物件明細收起"
+              >
+                ⊟ 全部收合
+              </button>
+              <button
+                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
+                style={{ color: "var(--ink-soft)", border: "1px solid var(--line)" }}
+                onClick={() => {
+                  setRentalForceState(true);
+                  setRentalExpandKey(k => k + 1);
+                }}
+                title="把所有物件明細展開"
+              >
+                ⊞ 全部展開
+              </button>
+              <button
+                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
+                style={{ color: "var(--ink-mute)" }}
+                onClick={() => {
+                  setRentalForceState(null);
+                  setRentalExpandKey(k => k + 1);
+                }}
+                title="恢復預設(有合約自動展開)"
+              >
+                ↻
+              </button>
+              <span className="text-xs ml-2" style={{ color: "var(--ink-mute)" }}>
+                依合約自動攤分,可勾選計入 / 手動覆寫金額
+              </span>
             </div>
           </div>
 
@@ -5147,43 +5184,71 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       const ownerName = owner ? owner.name : "—";
                       const isLand = p.assetType === "land";
 
-                      if (!agg.anyContractInYear || agg.contracts.length === 0) {
-                        // 沒合約,跳過
-                        return;
-                      }
+                      // 取得實際計入綜所的 computables (沒合約但有手動 rentalRecords 的情況也會被涵蓋)
+                      const computables = getComputablesForProperty(p, year, contracts, rentalRecords, filing.manualRentOverrides);
 
-                      agg.contracts.filter(c => c.months > 0).forEach(c => {
-                        const annual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
-                        // 算費用 + 所得總額
-                        const comp = {
-                          type: c.isPublic ? "public" : (isLand ? "land" : "general"),
-                          monthlyRent: c.monthly,
-                          months: c.months,
-                          annualRentDirect: annual,
-                          landTax: toNum(p.landTax || 0),
-                          expenseRatio: 0.43,
-                        };
-                        const breakdown = computeRentalIncome([comp], params).breakdown[0];
-                        const taxable = breakdown?.taxableIncome || 0;
-                        const expense = annual - taxable;
-                        const typeLabel = c.isPublic ? "公益" : (isLand ? "土地" : "一般");
-                        const typeColor = c.isPublic ? "var(--green)" : (isLand ? "var(--gold)" : "var(--ink-soft)");
-                        rows.push({
-                          propertySerial: p.serial || "",
-                          propertyName: p.name || "",
-                          address: p.address || "",
-                          tenant: c.tenantName,
-                          period: c.period,
-                          months: c.months,
-                          ownerName,
-                          typeLabel,
-                          typeColor,
-                          annual,
-                          expense,
-                          taxable,
-                          isAdjusted: c.isAdjusted,
+                      if (agg.anyContractInYear && agg.contracts.length > 0) {
+                        // 有合約 → 逐合約列出
+                        agg.contracts.filter(c => c.months > 0).forEach(c => {
+                          const annual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                          const comp = {
+                            type: c.isPublic ? "public" : (isLand ? "land" : "general"),
+                            monthlyRent: c.monthly,
+                            months: c.months,
+                            annualRentDirect: annual,
+                            landTax: toNum(p.landTax || 0),
+                            expenseRatio: 0.43,
+                          };
+                          const breakdown = computeRentalIncome([comp], params).breakdown[0];
+                          const taxable = breakdown?.taxableIncome || 0;
+                          const expense = annual - taxable;
+                          const typeLabel = c.isPublic ? "公益" : (isLand ? "土地" : "一般");
+                          const typeColor = c.isPublic ? "var(--green)" : (isLand ? "var(--gold)" : "var(--ink-soft)");
+                          rows.push({
+                            propertySerial: p.serial || "",
+                            propertyName: p.name || "",
+                            address: p.address || "",
+                            tenant: c.tenantName,
+                            period: c.period,
+                            months: c.months,
+                            ownerName,
+                            typeLabel,
+                            typeColor,
+                            annual,
+                            expense,
+                            taxable,
+                            isAdjusted: c.isAdjusted,
+                            isManualOnly: false,
+                          });
                         });
-                      });
+                      } else if (computables.length > 0) {
+                        // 沒合約但有 computables (來自 rentalRecords 或舊版手動覆寫) → 列出
+                        computables.forEach(comp => {
+                          const annual = comp.annualRentDirect || (comp.monthlyRent * comp.months) || 0;
+                          if (annual === 0) return;
+                          const breakdown = computeRentalIncome([comp], params).breakdown[0];
+                          const taxable = breakdown?.taxableIncome || 0;
+                          const expense = annual - taxable;
+                          const typeLabel = comp.type === "public" ? "公益" : (comp.type === "land" ? "土地" : "一般");
+                          const typeColor = comp.type === "public" ? "var(--green)" : (comp.type === "land" ? "var(--gold)" : "var(--ink-soft)");
+                          rows.push({
+                            propertySerial: p.serial || "",
+                            propertyName: p.name || "",
+                            address: p.address || "",
+                            tenant: comp.note || "手動輸入",
+                            period: `${comp.months} 個月`,
+                            months: comp.months,
+                            ownerName,
+                            typeLabel,
+                            typeColor,
+                            annual,
+                            expense,
+                            taxable,
+                            isAdjusted: false,
+                            isManualOnly: true,
+                          });
+                        });
+                      }
                     });
 
                     if (rows.length === 0) {
@@ -5211,6 +5276,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                               <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>
                                 {r.tenant} · {r.period}
                                 {r.isAdjusted && <span className="ml-1" style={{ color: "var(--gold)" }}>(手動)</span>}
+                                {r.isManualOnly && <span className="ml-1" style={{ color: "var(--gold)" }}>(無合約·手動)</span>}
                               </div>
                             </td>
                             <td className="text-center px-2 py-1.5">
@@ -5284,6 +5350,14 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               const isIncluded = override ? override.includeInFiling !== false : true;
               const hasContracts = agg.anyContractInYear;
 
+              // 「採用中」: 有合約計入 OR 沒合約但 taxableTotal > 0 (手動覆寫的)
+              const hasManualWithoutContract = !hasContracts && taxableTotal > 0;
+              const isActive = (hasContracts && isIncluded) || hasManualWithoutContract;
+
+              // 預設展開:採用中就展開;但若使用者按了「全部收合/展開」則 force
+              const defaultOpen = isActive;
+              const isOpen = rentalForceState === null ? defaultOpen : rentalForceState;
+
               // 算去年同物件的應稅租金 (作參考) — 直接用合約自動算,不參考去年的手動覆寫
               const lastYear = year - 1;
               const lastYearComputables = getComputablesForProperty(p, lastYear, contracts, rentalRecords, {});
@@ -5291,10 +5365,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               const lastYearAgg = aggregateContractsForYear(contracts, p.id, lastYear, {});
 
               return (
-                <details key={p.id} className="rounded" open={hasContracts && isIncluded} style={{ background: isIncluded ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
+                <details key={`${p.id}_${rentalExpandKey}`} className="rounded" open={isOpen} style={{ background: isActive ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
                   <summary className="px-3 py-2 flex items-center gap-3 cursor-pointer rounded-t" style={{
-                    background: hasContracts && isIncluded ? "var(--green-soft, #f5fbef)" : "transparent",
-                    borderBottom: hasContracts && isIncluded ? "1px solid var(--green)" : "none",
+                    background: isActive ? "var(--green-soft, #f5fbef)" : "transparent",
+                    borderBottom: isActive ? "1px solid var(--green)" : "none",
                   }}>
                     <span className="chevron text-xs" style={{ color: "var(--ink-mute)" }}>▸</span>
                     {hasContracts ? (
