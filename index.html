@@ -1568,18 +1568,28 @@ function aggregateContractsForYear(contracts, propertyId, year, manualOverrides)
   const overrideKey = `${propertyId}_${year}`;
   const override = (manualOverrides || {})[overrideKey] || {};
   const byContract = override.byContract || {};
+  const excludedContracts = override.excludedContracts || {};  // {contractId: true} 表示該合約不計入
 
   // 把 byContract 套用到 breakdown 上 (每份合約的 appliedRent)
   breakdown.forEach(item => {
+    const isExcluded = !!excludedContracts[item.contractId];
     const m = byContract[item.contractId];
-    if (m !== undefined && m !== "" && m !== null) {
+    if (isExcluded) {
+      // 使用者明確排除 → appliedRent = 0
+      item.manualRent = m !== undefined && m !== "" && m !== null ? toNum(m) : null;
+      item.appliedRent = 0;
+      item.isAdjusted = true;
+      item.isExcluded = true;
+    } else if (m !== undefined && m !== "" && m !== null) {
       item.manualRent = toNum(m);
       item.appliedRent = toNum(m);
       item.isAdjusted = true;
+      item.isExcluded = false;
     } else {
       item.manualRent = null;       // 沒手動調整
       item.appliedRent = item.rent; // 用合約原算的
       item.isAdjusted = false;
+      item.isExcluded = false;
     }
   });
 
@@ -5188,9 +5198,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                           合約攤分明細 ({agg.contracts.length} 份) · <span style={{ color: "var(--ink-mute)" }}>手動調整欄留空 = 用原合約算</span>
                         </div>
                         <div className="overflow-x-auto">
-                        <table className="w-full text-xs" style={{ minWidth: "900px" }}>
+                        <table className="w-full text-xs" style={{ minWidth: "950px" }}>
                           <thead>
                             <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+                              <th className="text-center px-2 py-1 font-medium" style={{ width: "40px" }}>計入</th>
                               <th className="text-left px-2 py-1 font-medium">租客</th>
                               <th className="text-left px-2 py-1 font-medium">租期</th>
                               <th className="text-center px-2 py-1 font-medium">月數</th>
@@ -5224,10 +5235,30 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                                 : origTax;
 
                               return (
-                                <tr key={c.contractId} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                                <tr key={c.contractId} style={{
+                                  borderBottom: "1px solid var(--line-soft)",
+                                  opacity: c.isExcluded ? 0.5 : 1,
+                                }}>
+                                  <td className="px-2 py-1 text-center">
+                                    <input type="checkbox"
+                                      checked={!c.isExcluded}
+                                      onChange={ev => {
+                                        const cur = (filing.manualRentOverrides?.[`${p.id}_${year}`]?.excludedContracts) || {};
+                                        const next = { ...cur };
+                                        if (ev.target.checked) {
+                                          delete next[c.contractId];
+                                        } else {
+                                          next[c.contractId] = true;
+                                        }
+                                        updateRentOverride(p.id, { excludedContracts: next });
+                                      }}
+                                      title={c.isExcluded ? "✗ 未計入此合約" : "✓ 計入此合約"}
+                                    />
+                                  </td>
                                   <td className="px-2 py-1">
                                     {c.tenantName}
                                     {c.hasOverlapWithPublic && <span className="ml-1 text-[9px]" style={{ color: "var(--gold)" }}>(部分被公益覆蓋)</span>}
+                                    {c.isExcluded && <span className="ml-1 text-[9px]" style={{ color: "var(--gold)" }}>(不計入)</span>}
                                   </td>
                                   <td className="px-2 py-1 num text-[10px]">{c.period}</td>
                                   <td className="px-2 py-1 text-center num">{
@@ -5274,7 +5305,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
                             {/* 合計列 */}
                             <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
-                              <td colSpan={4} className="px-2 py-2 text-right font-medium">合計</td>
+                              <td colSpan={5} className="px-2 py-2 text-right font-medium">合計</td>
                               <td className="px-2 py-2 text-right num font-medium">{fmt(agg.computedAnnualRent)}</td>
                               <td className="px-2 py-2 text-right num font-medium" style={{ background: "#fef9ec" }}>
                                 {agg.hasPerContractAdjust ? fmt(agg.appliedAnnualRent) : <span style={{ color: "var(--ink-mute)" }}>—</span>}
@@ -7103,8 +7134,8 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                 <table className="w-full text-xs" style={{ minWidth: "1000px" }}>
                   <thead>
                     <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--ink)" }}>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "82px" }}>所得類別</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "76px" }}>格式代號</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "110px" }}>所得類別</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "60px" }}>格式代號</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "180px" }}>所得發生處</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>統一編號</th>
                       {!groupByMember && (
