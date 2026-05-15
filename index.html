@@ -5796,10 +5796,28 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   )}
                 </td>
                 <td colSpan={2} className="px-3 py-2 text-right num font-medium" style={{ fontSize: "16px", color: "var(--accent-deep)" }}>
-                  {fmt(result.itemizedTotal)}
+                  {(() => {
+                    // 永遠顯示列舉合計 (不管是否採用),這樣使用者知道列舉是多少
+                    const overrides = filing.itemizedDeductions.overrides || {};
+                    const auto = result.itemizedAuto || {};
+                    const apply = (key, autoVal) => {
+                      const o = overrides[key];
+                      if (o !== undefined && o !== null && o !== "") return toNum(o);
+                      return autoVal;
+                    };
+                    const total =
+                      apply("donationGeneral", auto.donationGeneral || 0) +
+                      apply("donationUnlimited", auto.donationUnlimited || 0) +
+                      apply("insurancePersonal", auto.insurancePersonal || 0) +
+                      apply("insuranceHealth", auto.insuranceHealth || 0) +
+                      apply("medical", auto.medical || 0) +
+                      apply("disaster", auto.disaster || 0) +
+                      apply("mortgageInterest", auto.mortgageInterest || 0);
+                    return fmt(total);
+                  })()}
                 </td>
                 <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
-                  最終採用值
+                  {result.useItemized ? "✓ 採用列舉" : "標準較優,未採用"}
                 </td>
               </tr>
             </tbody>
