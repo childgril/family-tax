@@ -1103,16 +1103,17 @@ function computeTaxForFiling(filing, members, year) {
   //   m_${propertyId}_${year}_${idx}  — 手動補列
   //   n_${propertyId}_${year}  — 沒合約物件 (使用者手動填申報應稅)
   // 邏輯:override 值「取代」系統算出來的 taxable
+  // 同時要按「物件 owner」歸戶,讓 method 內計算也能套用 (透過 memberRentalAdjust)
   const dtOverrides = filing.declaredTaxableOverrides || {};
+  const memberRentalAdjust = {};  // {memberId: adjust 金額} 給 method 內套用
   if (Object.keys(dtOverrides).length > 0) {
-    // 為了套覆寫,需要重新逐物件 / 逐合約算系統值,然後替換
-    let overrideAdjust = 0;  // 累計覆寫造成的差額 (覆寫值 - 系統算值)
     const filerIds = new Set([filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean));
     (filing.properties || []).filter(p => filerIds.has(p.ownerId)).forEach(p => {
       const overrideKey = `${p.id}_${filing.year}`;
       const propOverride = (filing.manualRentOverrides || {})[overrideKey] || {};
       const isIncluded = propOverride.includeInFiling === true;
       const isLand = p.assetType === "land";
+      const ownerId = p.ownerId;
 
       // helper:用 taxable 算式 (跟對照表 calcTaxable 一致)
       const calcTaxableFor = (annualValue, isPub) => {
@@ -1127,42 +1128,40 @@ function computeTaxForFiling(filing, members, year) {
       };
 
       const agg = aggregateContractsForYear(filing.contracts, p.id, filing.year, filing.manualRentOverrides);
+      let propAdjust = 0;
 
       if (agg.anyContractInYear && agg.contracts.length > 0) {
-        // 逐合約檢查 override
         agg.contracts.filter(c => c.months > 0).forEach(c => {
           const auditKey = `c_${c.contractId}_${filing.year}`;
           const ov = dtOverrides[auditKey];
           if (ov === undefined || ov === null || ov === "") return;
           const overrideVal = toNum(ov);
-          // 系統算的 = 用 appliedRent 算 (這跟 r.taxable 的計算一致)
           const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
           const sysTaxable = isIncluded ? calcTaxableFor(appliedAnnual, c.isPublic) : 0;
-          overrideAdjust += (overrideVal - sysTaxable);
+          propAdjust += (overrideVal - sysTaxable);
         });
       } else {
-        // 沒合約 → 用 n_ key
         const auditKey = `n_${p.id}_${filing.year}`;
         const ov = dtOverrides[auditKey];
-        if (ov === undefined || ov === null || ov === "") return;
-        const overrideVal = toNum(ov);
-        // 系統算的:這物件本身沒合約所以系統算 = 0
-        const sysTaxable = 0;
-        overrideAdjust += (overrideVal - sysTaxable);
+        if (ov !== undefined && ov !== null && ov !== "") {
+          propAdjust += (toNum(ov) - 0);
+        }
       }
-      // m_ 格式 (手動補列) 需要 idx,複雜些。getComputablesForProperty 會回傳 computables 陣列。
       const computables = getComputablesForProperty(p, filing.year, filing.contracts, filing.rentalRecords || [], filing.manualRentOverrides);
       computables.forEach((comp, idx) => {
         const auditKey = `m_${p.id}_${filing.year}_${idx}`;
         const ov = dtOverrides[auditKey];
         if (ov === undefined || ov === null || ov === "") return;
         const overrideVal = toNum(ov);
-        const annual = comp.annualRentDirect || (comp.monthlyRent * comp.months) || 0;
         const sysTaxable = isIncluded ? (computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0) : 0;
-        overrideAdjust += (overrideVal - sysTaxable);
+        propAdjust += (overrideVal - sysTaxable);
       });
+
+      if (propAdjust !== 0) {
+        memberRentalAdjust[ownerId] = (memberRentalAdjust[ownerId] || 0) + propAdjust;
+        rentalTaxable += propAdjust;
+      }
     });
-    rentalTaxable += overrideAdjust;
   }
 
   const grossIncome = salaryGross + interest + dividend + rentalTaxable + otherIncome;
@@ -1369,12 +1368,15 @@ function computeTaxForFiling(filing, members, year) {
       filers.forEach(m => {
         const orig = filing.memberIncome?.[m.id] || {};
         const fromEnt = incomeFromEntries[m.id] || {};
+        // 套用 declaredTaxableOverrides 的差額 (把 override 視為「其他所得」的調整)
+        const rentalAdj = memberRentalAdjust[m.id] || 0;
         merged[m.id] = {
           salary: fromEnt.salary !== undefined ? fromEnt.salary : toNum(orig.salary),
           interest: fromEnt.interest !== undefined ? fromEnt.interest : toNum(orig.interest),
           dividend: fromEnt.dividend !== undefined ? fromEnt.dividend : toNum(orig.dividend),
           other: (fromEnt.other !== undefined ? fromEnt.other : toNum(orig.other))
-                 + (fromEnt._rental_entries || 0),  // 把租賃 entries 算成「其他」(避免雙重計算合約)
+                 + (fromEnt._rental_entries || 0)
+                 + rentalAdj,  // 申報書對照表的覆寫差額 (視為其他所得)
         };
       });
       return merged;
@@ -7888,17 +7890,18 @@ function OfficialFormView({ result, year, filing }) {
   const grossIncome = grossIncomeRaw - salarySD;  // 申報書版「綜合所得總額」(薪資已扣完特扣)
   const exemption = result.exemption || 0;
   const generalDeduction = (result.useItemized ? result.itemizedTotal : result.standardDeduction) || 0;
-  // 申報書版「扣除額」= 一般 + 儲蓄 + 身障 + 教育 + 幼兒 + 長照 + 房屋 (不含薪資特扣)
   const savings = result.savings || 0;
   const disabilityDed = result.disabilityDed || 0;
   const educationDed = result.educationDed || 0;
   const preschoolDed = result.preschoolDed || 0;
   const longTermCareDed = result.longTermCareDed || 0;
   const rentDeductActual = result.rentDeductActual || 0;
-  const specialTotalForForm = savings + disabilityDed + educationDed + preschoolDed + longTermCareDed + rentDeductActual;
-  const totalDeduction = generalDeduction + specialTotalForForm;
   const blDiff = result.blDiff || 0;
   const netIncome = result.netIncome || 0;
+  // 申報書版「全部扣除額」: 用反推法,確保 (綜所總額 - 免稅 - 全部扣除 - 差額 - 新創) = 淨額
+  // 反推:totalDeduction = grossIncome - exemption - blDiff - netIncome (新創通常 0)
+  // 這樣可確保跟系統實際採用的 net 完全一致 (避免顯示對不上 result.tax 的問題)
+  const totalDeduction = Math.max(0, grossIncome - exemption - blDiff - netIncome);
   const rate = result.taxRate || 0;
   const deductValue = result.taxDeductValue || 0;
   const taxBeforeCredits = result.tax || 0;
