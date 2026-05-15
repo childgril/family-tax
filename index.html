@@ -1305,10 +1305,12 @@ function computeTaxForFiling(filing, members, year) {
     actualMortgageAuto = Math.min(Math.max(0, mortgageInterest - savings), params.mortgageLimit);
   }
   const actualMortgage = useItemized ? applyOverride("mortgageInterest", actualMortgageAuto) : 0;
-  // 重算列舉合計 (扣除儲蓄投資後的房貸利息)
-  const itemizedTotalActual = useItemized ?
-    (donationGeneralCapped + donationUnlimitedCapped + insurancePersonalCapped + insuranceHealthCapped + medicalCapped + disasterCapped + actualMortgage)
-    : 0;
+  // 列舉合計 — 永遠顯示「假設採列舉的合計值」,讓使用者看得到列舉是多少
+  // 採用標扣時 actualMortgage = 0,所以這裡用 actualMortgageIfItemized (跟判斷邏輯一致)
+  const itemizedTotalActual =
+    donationGeneralCapped + donationUnlimitedCapped +
+    insurancePersonalCapped + insuranceHealthCapped +
+    medicalCapped + disasterCapped + actualMortgageIfItemized;
   const generalDeductionActual = useItemized ? itemizedTotalActual : standardDeduction;
 
   const specialBeforeRent = salarySD + savings + disabilityDed + educationDed + preschoolDed + longTermCareDed;
