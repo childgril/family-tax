@@ -2000,30 +2000,133 @@ function computeFilingWithData(filing, data, year) {
 
 // ============================================================
 function Dashboard({ data, year, setPage }) {
-  const yearFilings = data.filings.filter(f => f.year === year);
-  const results = yearFilings.map(f => computeFilingWithData(f, data, year));
-  const totalTax = results.reduce((s, r) => s + (r?.tax || 0), 0);
-  const totalIncome = results.reduce((s, r) => s + (r?.grossIncome || 0), 0);
-  const totalSaving = results.reduce((s, r) => s + Math.max(0, r?.saving || 0), 0);
-
-  // 歷年比較
-  const yearTotals = AVAILABLE_YEARS.map(y => {
+  // === 計算所有年度的所有申報戶結果 (給後面各區塊用) ===
+  const allYearResults = {};  // {year: [{filing, result}]}
+  AVAILABLE_YEARS.forEach(y => {
     const fs = data.filings.filter(f => f.year === y);
-    const rs = fs.map(f => computeFilingWithData(f, data, y));
-    return {
-      year: y,
-      tax: rs.reduce((s, r) => s + (r?.tax || 0), 0),
-      income: rs.reduce((s, r) => s + (r?.grossIncome || 0), 0),
-      count: fs.length,
-    };
-  }).reverse();
+    allYearResults[y] = fs.map(f => ({
+      filing: f,
+      result: computeFilingWithData(f, data, y),
+    }));
+  });
+
+  // === 第一部分:每個申報戶累積繳稅 ===
+  // 規則:把不同年度但「同一申報戶」的累積在一起 (用 taxpayerId + spouseId 為 key)
+  const householdGroups = {};  // {key: {label, members, byYear: {y: {fd, actual}}, totalActual, totalSys}}
+  AVAILABLE_YEARS.forEach(y => {
+    allYearResults[y].forEach(({ filing, result }) => {
+      // 用「主納稅人 + 配偶」當識別 key
+      const ids = [filing.taxpayerId, filing.spouseId].filter(Boolean).sort();
+      const key = ids.join("_");
+      if (!householdGroups[key]) {
+        const members = ids.map(id => data.members.find(m => m.id === id)).filter(Boolean);
+        householdGroups[key] = {
+          key,
+          label: members.map(m => m.name).join(" & "),
+          members,
+          byYear: {},
+          totalActual: 0,
+          totalSys: 0,
+          totalRefund: 0,
+          totalPaid: 0,
+        };
+      }
+      const grp = householdGroups[key];
+      const sysFd = result?.finalDue || 0;
+      const actualAmt = filing.actualSettlement?.actualAmount;
+      const hasActual = actualAmt !== undefined && actualAmt !== "" && actualAmt !== null;
+      const fd = hasActual ? toNum(actualAmt) : sysFd;
+      // 加總後續調整
+      const adjustments = filing.adjustments || [];
+      const adjTotal = adjustments.reduce((s, a) => {
+        const v = toNum(a.amount);
+        return a.type === "refund_received" ? s - v : s + v;
+      }, 0);
+      const finalCash = fd + adjTotal;  // 該年度實際淨支出 (正=補繳, 負=退稅)
+
+      grp.byYear[y] = { fd, hasActual, finalCash, adjTotal, filing, result };
+      grp.totalActual += finalCash;
+      grp.totalSys += sysFd;
+      if (finalCash > 0) grp.totalPaid += finalCash;
+      else grp.totalRefund += -finalCash;
+    });
+  });
+  const householdList = Object.values(householdGroups).sort((a, b) => b.totalPaid - a.totalPaid);
+
+  // === 第三部分用:每年度每申報戶的「所得類別 / 捐贈 / 租金」 ===
+  // 列出每年度的申報戶,顯示這些欄位
+  const yearlyBreakdown = [];
+  AVAILABLE_YEARS.forEach(y => {
+    allYearResults[y].forEach(({ filing, result }) => {
+      if (!result) return;
+      const it = filing.itemizedDeductions || {};
+      yearlyBreakdown.push({
+        year: y,
+        filing,
+        result,
+        salaryGross: result.salaryGross || 0,
+        interest: result.interest || 0,
+        dividend: result.dividend || 0,
+        rentalTaxable: result.rentalTaxable || 0,
+        otherIncome: result.otherIncome || 0,
+        donationTotal: toNum(it.donationGeneral) + toNum(it.donationUnlimited),
+        finalDue: result.finalDue || 0,
+      });
+    });
+  });
+
+  // === 第四部分用:租賃合約年度比較 (歸戶屋主 + 物件) ===
+  // 找出所有 5 年內被申報過的物件
+  const propertiesUsedAcrossYears = new Set();
+  AVAILABLE_YEARS.forEach(y => {
+    allYearResults[y].forEach(({ filing, result }) => {
+      if (!result) return;
+      // 從 filing.properties (含 owner) 取
+      const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
+      (data.properties || []).filter(p => filerIds.includes(p.ownerId))
+        .forEach(p => propertiesUsedAcrossYears.add(p.id));
+    });
+  });
+  const rentalCompareRows = Array.from(propertiesUsedAcrossYears).map(pId => {
+    const p = data.properties.find(pp => pp.id === pId);
+    if (!p) return null;
+    const owner = data.members.find(m => m.id === p.ownerId);
+    const byYear = {};
+    AVAILABLE_YEARS.forEach(y => {
+      const agg = aggregateContractsForYear(data.contracts, p.id, y, {});
+      // 找出該物件在該年度對應的 filing,看是否被計入
+      const filingForYear = data.filings.find(f =>
+        f.year === y &&
+        [f.taxpayerId, f.spouseId, ...(f.dependentIds || [])].includes(p.ownerId)
+      );
+      const overrides = filingForYear?.manualRentOverrides || {};
+      const isIncluded = overrides[`${p.id}_${y}`]?.includeInFiling === true;
+
+      // 算實際採用的租金 (考慮手動調整 + 排除合約)
+      const computables = getComputablesForProperty(p, y, data.contracts, [], overrides);
+      const annualRent = computables.reduce((s, c) => s + (c.annualRentDirect || c.monthlyRent * c.months || 0), 0);
+      const monthsCount = agg.contracts ? agg.contracts.filter(c => c.months > 0).length : 0;
+      const contractMonths = agg.totalMonths || 0;
+      const types = new Set(agg.contracts?.filter(c => c.months > 0).map(c => c.isPublic ? "公益" : "一般"));
+
+      byYear[y] = {
+        annualRent: isIncluded ? annualRent : 0,
+        actualRent: agg.computedAnnualRent || 0,
+        included: isIncluded,
+        contractsCount: monthsCount,
+        months: contractMonths,
+        typeLabel: Array.from(types).join("+") || "—",
+      };
+    });
+    return { property: p, owner, byYear };
+  }).filter(Boolean);
 
   return (
     <div className="fade-in">
       <PageHeader
-        ornament={`§ DASHBOARD · ${year} 年度`}
+        ornament="§ DASHBOARD"
         title="家族稅務總覽"
-        subtitle={`${TAX_PARAMS[year].label} · 共 ${yearFilings.length} 個申報戶`}
+        subtitle="按申報戶 / 年度 / 物件多維檢視"
         right={
           <div className="text-right text-xs" style={{ color: "var(--ink-mute)" }}>
             <div>最後更新</div>
@@ -2032,126 +2135,282 @@ function Dashboard({ data, year, setPage }) {
         }
       />
 
-      {/* 主要數字 */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
-        <div className="card p-5">
-          <div className="ornament">TOTAL GROSS INCOME</div>
-          <div className="font-serif text-3xl num mt-2" style={{ color: "var(--ink)" }}>{fmt(totalIncome)}</div>
-          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>全戶綜合所得總額 (TWD)</div>
-        </div>
-        <div className="card p-5" style={{ borderColor: "var(--accent)" }}>
-          <div className="ornament" style={{ color: "var(--accent-deep)" }}>TAX PAYABLE</div>
-          <div className="font-serif text-3xl num mt-2" style={{ color: "var(--accent-deep)" }}>{fmt(totalTax)}</div>
-          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>應納稅額 (TWD)</div>
-        </div>
-        <div className="card p-5">
-          <div className="ornament">EFFECTIVE RATE</div>
-          <div className="font-serif text-3xl num mt-2" style={{ color: "var(--ink)" }}>
-            {totalIncome > 0 ? (totalTax / totalIncome * 100).toFixed(2) : "0.00"}<span className="text-base ml-1">%</span>
+      {/* ============ 第一部分:每個申報戶累積繳稅 ============ */}
+      <div className="card mb-6">
+        <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
+          <div className="ornament">PART 1 · 申報戶累積繳稅</div>
+          <div className="font-serif text-base mt-1">💰 各申報戶歷年累積稅金</div>
+          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+            以「實際結算金額 + 後續調整」累計;若未填實際金額則用系統試算
           </div>
-          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>實際稅率</div>
         </div>
-        <div className="card p-5" style={{ borderColor: "var(--green)" }}>
-          <div className="ornament" style={{ color: "#3d5235" }}>SAVINGS vs ALT</div>
-          <div className="font-serif text-3xl num mt-2" style={{ color: "#3d5235" }}>{fmt(totalSaving)}</div>
-          <div className="text-xs mt-1" style={{ color: "var(--ink-mute)" }}>選對扣除額省下</div>
-        </div>
-      </div>
-
-      {/* 申報戶清單 */}
-      <div className="card mb-8">
-        <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
-          <div className="ornament">FILING HOUSEHOLDS · {year}</div>
-          <button onClick={() => setPage("filing")} className="btn-secondary text-xs">管理申報戶 →</button>
-        </div>
-        {yearFilings.length === 0 ? (
-          <div className="px-5 py-12 text-center" style={{ color: "var(--ink-mute)" }}>
-            <div className="text-4xl mb-3">∅</div>
-            <div className="text-sm">{year} 年度尚無申報戶資料</div>
-            <button onClick={() => setPage("filing")} className="btn-primary mt-4 text-sm">建立第一個申報戶</button>
-          </div>
-        ) : (
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
                 <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
-                <th className="text-left px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>成員</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>綜合所得</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>淨所得</th>
-                <th className="text-center px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>稅率</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>扣除額</th>
-                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應補/退稅</th>
+                {AVAILABLE_YEARS.slice().reverse().map(y => (
+                  <th key={y} className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>
+                    {y} 年度
+                  </th>
+                ))}
+                <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px", background: "#f5fbef" }}>累積補繳</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>累積退稅</th>
               </tr>
             </thead>
             <tbody>
-              {results.map((r, i) => {
-                const f = yearFilings[i];
-                return (
-                  <tr key={f.id} className="table-row">
-                    <td className="px-5 py-3">
-                      <div className="font-medium">{f.name || "(未命名)"}</div>
-                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{r.hasSpouse ? "夫妻合併" : "個人申報"}</div>
-                    </td>
-                    <td className="px-3 py-3 text-xs">{r.filers.map(m => m.name).join("、")}</td>
-                    <td className="px-3 py-3 text-right num">{fmt(r.grossIncome)}</td>
-                    <td className="px-3 py-3 text-right num">{fmt(r.netIncome)}</td>
-                    <td className="px-3 py-3 text-center">
-                      <span className="chip chip-accent">{(r.taxRate * 100).toFixed(0)}%</span>
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <span className={`chip ${r.useItemized ? "chip-green" : "chip-amber"}`}>
-                        {r.useItemized ? "列舉" : "標準"}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-right num font-serif text-base">
-                      {(() => {
-                        const sysFd = r.finalDue || 0;
-                        const actualAmt = f.actualSettlement?.actualAmount;
-                        const hasActual = actualAmt !== undefined && actualAmt !== "" && actualAmt !== null;
-                        const fd = hasActual ? toNum(actualAmt) : sysFd;
-                        const color = fd > 0 ? "var(--ink)" : fd < 0 ? "var(--green)" : "var(--ink-mute)";
-                        const prefix = fd > 0 ? "" : fd < 0 ? "−" : "";
+              {householdList.length === 0 ? (
+                <tr><td colSpan={AVAILABLE_YEARS.length + 3} className="text-center py-6 text-xs" style={{ color: "var(--ink-mute)" }}>尚無申報資料</td></tr>
+              ) : householdList.map(grp => (
+                <tr key={grp.key} className="table-row">
+                  <td className="px-5 py-3">
+                    <div className="font-medium">{grp.label || "(未命名)"}</div>
+                    <div className="text-xs" style={{ color: "var(--ink-mute)" }}>
+                      {grp.members.length === 2 ? "夫妻申報戶" : "個人申報戶"}
+                    </div>
+                  </td>
+                  {AVAILABLE_YEARS.slice().reverse().map(y => {
+                    const d = grp.byYear[y];
+                    if (!d) return <td key={y} className="text-right px-3 py-3 text-xs" style={{ color: "var(--ink-mute)" }}>—</td>;
+                    const v = d.finalCash;
+                    return (
+                      <td key={y} className="text-right px-3 py-3 num">
+                        <div style={{ color: v > 0 ? "var(--ink)" : v < 0 ? "var(--green)" : "var(--ink-mute)" }}>
+                          {v === 0 ? "0" : v > 0 ? fmt(v) : `−${fmt(-v)}`}
+                        </div>
+                        {d.hasActual && <div className="text-[9px]" style={{ color: "var(--green)" }}>實</div>}
+                      </td>
+                    );
+                  })}
+                  <td className="text-right px-5 py-3 num font-serif text-base" style={{ background: "#f5fbef", color: "var(--accent-deep)" }}>
+                    {fmt(grp.totalPaid)}
+                  </td>
+                  <td className="text-right px-3 py-3 num text-sm" style={{ color: "var(--green)" }}>
+                    {fmt(grp.totalRefund)}
+                  </td>
+                </tr>
+              ))}
+              {householdList.length > 0 && (
+                <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
+                  <td className="px-5 py-3 font-medium text-sm">全家族總計</td>
+                  {AVAILABLE_YEARS.slice().reverse().map(y => {
+                    const total = householdList.reduce((s, g) => s + (g.byYear[y]?.finalCash || 0), 0);
+                    return (
+                      <td key={y} className="text-right px-3 py-3 num text-xs font-medium" style={{ color: total > 0 ? "var(--ink)" : total < 0 ? "var(--green)" : "var(--ink-mute)" }}>
+                        {total === 0 ? "0" : total > 0 ? fmt(total) : `−${fmt(-total)}`}
+                      </td>
+                    );
+                  })}
+                  <td className="text-right px-5 py-3 num font-serif" style={{ background: "#f5fbef", color: "var(--accent-deep)", fontSize: "18px" }}>
+                    {fmt(householdList.reduce((s, g) => s + g.totalPaid, 0))}
+                  </td>
+                  <td className="text-right px-3 py-3 num font-medium" style={{ color: "var(--green)" }}>
+                    {fmt(householdList.reduce((s, g) => s + g.totalRefund, 0))}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ============ 第二部分:依年度列出申報戶 (可收合) ============ */}
+      <div className="card mb-6">
+        <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
+          <div className="ornament">PART 2 · 各年度申報戶明細</div>
+          <div className="font-serif text-base mt-1">📑 按年度展開查看</div>
+        </div>
+        <div className="p-3 space-y-2">
+          {AVAILABLE_YEARS.map(y => {
+            const filings = allYearResults[y];
+            if (filings.length === 0) return null;
+            return (
+              <details key={y} className="rounded" style={{ border: "1px solid var(--line)" }}>
+                <summary className="px-4 py-2 cursor-pointer flex items-center justify-between hover:bg-gray-50">
+                  <div className="flex items-center gap-3">
+                    <span className="chevron text-xs" style={{ color: "var(--ink-mute)" }}>▸</span>
+                    <span className="font-serif font-medium">{y} 年度</span>
+                    <span className="text-xs" style={{ color: "var(--ink-mute)" }}>· 共 {filings.length} 個申報戶</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs num" style={{ color: "var(--ink-soft)" }}>
+                    <span>合計補繳 <b>{fmt(filings.reduce((s, { filing, result }) => {
+                      const sysFd = result?.finalDue || 0;
+                      const actual = filing.actualSettlement?.actualAmount;
+                      const fd = (actual !== undefined && actual !== "") ? toNum(actual) : sysFd;
+                      return s + Math.max(0, fd);
+                    }, 0))}</b></span>
+                  </div>
+                </summary>
+                <div className="px-1 pb-3">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
+                        <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
+                        <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>成員</th>
+                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>綜合所得</th>
+                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>淨所得</th>
+                        <th className="text-center px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>稅率</th>
+                        <th className="text-center px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>扣除額方式</th>
+                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>應納稅額</th>
+                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>應補繳/退稅</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filings.map(({ filing, result }) => {
+                        const sysFd = result?.finalDue || 0;
+                        const actual = filing.actualSettlement?.actualAmount;
+                        const hasActual = actual !== undefined && actual !== "" && actual !== null;
+                        const fd = hasActual ? toNum(actual) : sysFd;
                         return (
-                          <span style={{ color }}>
-                            {prefix}{fmt(Math.abs(fd))}
-                            {hasActual && <span className="chip chip-green text-[9px] ml-1">實際</span>}
-                          </span>
+                          <tr key={filing.id} className="table-row" style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                            <td className="px-3 py-2">
+                              <div className="font-medium">{filing.name || "(未命名)"}</div>
+                              <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                                {y} 年度 · {result?.hasSpouse ? "夫妻合併" : "個人申報"}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                              {result?.filers?.map(m => m.name).join("、") || "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right num">{fmt(result?.grossIncome || 0)}</td>
+                            <td className="px-3 py-2 text-right num">{fmt(result?.netIncome || 0)}</td>
+                            <td className="px-3 py-2 text-center">
+                              <span className="chip chip-accent text-[10px]">{((result?.taxRate || 0) * 100).toFixed(0)}%</span>
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <span className={`chip text-[10px] ${result?.useItemized ? "chip-green" : "chip-amber"}`}>
+                                {result?.useItemized ? "列舉" : "標準"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-right num">{fmt(result?.tax || 0)}</td>
+                            <td className="px-3 py-2 text-right num font-medium" style={{ color: fd > 0 ? "var(--accent-deep)" : fd < 0 ? "var(--green)" : "var(--ink-mute)" }}>
+                              {fd === 0 ? "0" : fd > 0 ? `補 ${fmt(fd)}` : `退 ${fmt(-fd)}`}
+                              {hasActual && <span className="chip chip-green text-[9px] ml-1">實</span>}
+                            </td>
+                          </tr>
                         );
-                      })()}
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ============ 第三部分:歷年比較 ============ */}
+      <div className="card mb-6">
+        <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
+          <div className="ornament">PART 3 · 歷年所得結構比較</div>
+          <div className="font-serif text-base mt-1">📊 各年度各申報戶 所得 / 捐贈 / 租金 / 稅金</div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>年度</th>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>薪資</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>利息</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>租金所得</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>其他</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fef9ec" }}>捐贈總額</th>
+                <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#f5fbef" }}>應納稅額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {yearlyBreakdown.length === 0 ? (
+                <tr><td colSpan={9} className="text-center py-6 text-xs" style={{ color: "var(--ink-mute)" }}>尚無申報資料</td></tr>
+              ) : yearlyBreakdown.map((r, i) => {
+                const prev = i > 0 ? yearlyBreakdown[i - 1] : null;
+                const isNewYear = !prev || prev.year !== r.year;
+                return (
+                  <tr key={`${r.year}_${r.filing.id}`} style={{
+                    borderBottom: "1px solid var(--line-soft)",
+                    borderTop: isNewYear ? "2px solid var(--line)" : "none",
+                  }}>
+                    <td className="px-3 py-2 font-serif">{isNewYear ? `${r.year}` : ""}</td>
+                    <td className="px-3 py-2 text-[11px]">{r.filing.name || "(未命名)"}</td>
+                    <td className="px-2 py-2 text-right num">{fmt(r.salaryGross)}</td>
+                    <td className="px-2 py-2 text-right num">{fmt(r.interest)}</td>
+                    <td className="px-2 py-2 text-right num">{fmt(r.dividend)}</td>
+                    <td className="px-2 py-2 text-right num">{fmt(r.rentalTaxable)}</td>
+                    <td className="px-2 py-2 text-right num text-[11px]" style={{ color: "var(--ink-mute)" }}>{fmt(r.otherIncome)}</td>
+                    <td className="px-2 py-2 text-right num" style={{ background: "#fef9ec", color: r.donationTotal > 0 ? "var(--gold)" : "var(--ink-mute)" }}>
+                      {fmt(r.donationTotal)}
+                    </td>
+                    <td className="px-3 py-2 text-right num font-medium" style={{ background: "#f5fbef", color: r.finalDue > 0 ? "var(--accent-deep)" : "var(--green)" }}>
+                      {r.finalDue === 0 ? "0" : r.finalDue > 0 ? fmt(r.finalDue) : `−${fmt(-r.finalDue)}`}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        )}
+        </div>
       </div>
 
-      {/* 歷年比較 */}
-      <div className="card">
-        <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)" }}>
-          <div className="ornament">HISTORICAL COMPARISON · 歷年比較</div>
+      {/* ============ 第四部分:租賃合約年度比較 ============ */}
+      <div className="card mb-6">
+        <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
+          <div className="ornament">PART 4 · 租賃合約歷年比較</div>
+          <div className="font-serif text-base mt-1">🏠 各物件歷年申報租金</div>
+          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+            勾選「計入」才會列入該年度報稅;括弧顯示合約類型 + 月數
+          </div>
         </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
-              <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>年度</th>
-              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
-              <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>綜合所得</th>
-              <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>應納稅額</th>
-            </tr>
-          </thead>
-          <tbody>
-            {yearTotals.map(y => (
-              <tr key={y.year} className="table-row">
-                <td className="px-5 py-3 font-serif">{y.year} 年度</td>
-                <td className="px-3 py-3 text-right num">{y.count}</td>
-                <td className="px-3 py-3 text-right num">{fmt(y.income)}</td>
-                <td className="px-5 py-3 text-right num font-serif">{fmt(y.tax)}</td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>物件</th>
+                {AVAILABLE_YEARS.slice().reverse().map(y => (
+                  <th key={y} className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>
+                    {y} 年度
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rentalCompareRows.length === 0 ? (
+                <tr><td colSpan={AVAILABLE_YEARS.length + 2} className="text-center py-6 text-xs" style={{ color: "var(--ink-mute)" }}>尚無租賃物件</td></tr>
+              ) : rentalCompareRows.map(({ property, owner, byYear }) => (
+                <tr key={property.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                  <td className="px-3 py-2 text-[11px]">{owner?.name || "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="text-[11px]">{property.address || property.name}</div>
+                    {property.assetType === "land" && (
+                      <span className="text-[9px]" style={{ color: "var(--gold)" }}>🌳 土地</span>
+                    )}
+                  </td>
+                  {AVAILABLE_YEARS.slice().reverse().map(y => {
+                    const d = byYear[y];
+                    if (!d || d.contractsCount === 0) {
+                      return <td key={y} className="text-right px-2 py-2 text-xs" style={{ color: "var(--ink-mute)" }}>—</td>;
+                    }
+                    return (
+                      <td key={y} className="text-right px-2 py-2">
+                        <div className="num font-medium" style={{
+                          color: d.included ? "var(--accent-deep)" : "var(--ink-mute)",
+                          textDecoration: d.included ? "none" : "line-through",
+                        }}>
+                          {fmt(d.annualRent)}
+                        </div>
+                        <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>
+                          {d.typeLabel} · {Number.isInteger(d.months) ? d.months : d.months.toFixed(1)} 個月
+                          {!d.included && <span className="ml-1" style={{ color: "var(--gold)" }}>(未計入)</span>}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
