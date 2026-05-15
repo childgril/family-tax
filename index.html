@@ -5042,31 +5042,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
           ③ CREDITS · 稅額抵減與已扣繳
         </div>
         <div className="p-5 space-y-4">
-          {/* 股利課稅方式 — 已由 ④ 區自動比較,這裡只顯示資訊 */}
-          {(result.dividend54 || 0) > 0 && (
-            <div className="p-3 rounded text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
-              <div className="font-medium mb-1" style={{ color: "var(--ink-soft)" }}>股利所得課稅方式</div>
-              <div style={{ color: "var(--ink-mute)" }}>
-                系統會自動在 ④ 區比較「合併 8.5% 抵減」vs「分開 28%」兩種方式,並採用最有利者。
-              </div>
-              <div className="mt-1 grid grid-cols-2 gap-3 num">
-                <div>
-                  <span style={{ color: "var(--green)" }}>● 合併 8.5% 抵減</span>:
-                  {fmt(Math.min(Math.round((result.dividend54 || result.dividend) * 0.085), 80000))} 元
-                </div>
-                <div>
-                  <span style={{ color: "var(--ink-soft)" }}>○ 分開 28%</span>:
-                  {fmt(Math.round((result.dividend54 || result.dividend) * 0.28))} 元
-                </div>
-              </div>
-              {result.dividendOther > 0 && (
-                <div className="text-[10px] mt-1" style={{ color: "var(--gold)" }}>
-                  ⚠ 71D/71G 等營利所得 {fmt(result.dividendOther)} 不享抵減 (已扣除)
-                </div>
-              )}
-            </div>
-          )}
-
           {/* 已扣繳 (自動帶入,只讀) + 其他抵減 */}
           <div className="grid grid-cols-3 gap-3">
             <div>
@@ -5124,88 +5099,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         <TaxMethodsPanel result={result} filing={filing} onChange={onChange} />
       )}
 
-      {/* 異常檢測:扣除額/扣繳明顯偏離常理時提示 */}
-      {(() => {
-        const warnings = [];
-        const it = filing.itemizedDeductions || {};
-        const medical = toNum(it.medical);
-        const donation = toNum(it.donationGeneral);
-        const mortgage = toNum(it.mortgageInterest);
-        const grossForDonation = (result.grossIncomeForDonation || result.grossIncome) || 0;
-        const donationCap = Math.round(grossForDonation * 0.20);
-        // 1. 醫藥超過 30 萬警告 (一般人不會這麼多)
-        if (medical > 300000) {
-          // 推測:該數字除以 10 是否落在「合理範圍」(50 萬以下)
-          const div10 = Math.round(medical / 10);
-          const looksLikeTypo = medical > 1000000 && div10 < 500000;
-          warnings.push({
-            type: "醫藥及生育費",
-            level: "high",
-            msg: looksLikeTypo
-              ? `你輸入 ${fmt(medical)} 元,疑似多打一個 0。是否應為 ${fmt(div10)} 元?雖法規不限額,但這金額罕見,請核對單據`
-              : `你輸入了 ${fmt(medical)} 元,大於 30 萬。雖然法規不限額,但需有單據佐證。請確認:1) 是否為實際醫療支出 2) 是否已扣除保險理賠 3) 數字是否正確(常見錯誤是多打 0)`,
-          });
-        }
-        // 2. 捐贈超過 20% 上限
-        if (donation > donationCap && donationCap > 0) {
-          warnings.push({
-            type: "一般捐贈",
-            level: "info",
-            msg: `輸入 ${fmt(donation)} 元 > 20% 上限 ${fmt(donationCap)}。系統已套用上限,實際扣除 ${fmt(donationCap)}。如有「不限額捐贈」(政府/國防/勞軍/古蹟),請改填到「不限額捐贈」欄`,
-          });
-        }
-        // 3. 房貸超過 30 萬
-        if (mortgage > 300000) {
-          warnings.push({
-            type: "房貸利息",
-            level: "info",
-            msg: `輸入 ${fmt(mortgage)} 元 > 法定上限 30 萬。系統已套用上限`,
-          });
-        }
-        // 4. 全部扣除額超過綜所總額警告(肯定不對)
-        if (result.generalDeduction + (result.specialTotal || 0) > result.grossIncome) {
-          warnings.push({
-            type: "扣除額異常",
-            level: "high",
-            msg: `總扣除 ${fmt(result.generalDeduction + (result.specialTotal || 0))} > 綜所總額 ${fmt(result.grossIncome)},導致應納稅 = 0。請檢查 ② DEDUCTIONS 各欄是否有錯填(常見:醫藥多打 0)`,
-          });
-        }
-        // 5. 扣繳明顯偏低 vs 薪資
-        const salaryGross = result.salaryGross || 0;
-        const prepaid = result.prepaidTax || 0;
-        if (salaryGross > 1000000 && prepaid < 1000) {
-          warnings.push({
-            type: "扣繳稅額偏低",
-            level: "high",
-            msg: `薪資 ${fmt(salaryGross)} 元但扣繳 ${fmt(prepaid)} 元(< 1000)。請檢查逐筆所得明細中,薪資那幾筆的「扣繳稅額」欄是否有填(若空白,系統會算 0)`,
-          });
-        }
-
-        if (warnings.length === 0) return null;
-        return (
-          <div className="card" style={{ borderColor: "var(--gold)" }}>
-            <div className="px-5 py-3 flex items-center" style={{ borderBottom: "1px solid var(--line)", background: "#fef9ec" }}>
-              <div className="ornament" style={{ color: "var(--gold)" }}>⚠ ANOMALY DETECTION · 異常檢測 ({warnings.length} 項)</div>
-            </div>
-            <div className="p-5 space-y-2">
-              {warnings.map((w, i) => (
-                <div key={i} className="p-3 rounded text-xs flex gap-2"
-                  style={{
-                    background: w.level === "high" ? "#fff5f5" : "#fef9ec",
-                    border: `1px solid ${w.level === "high" ? "#fca5a5" : "var(--gold)"}`
-                  }}>
-                  <span style={{ color: w.level === "high" ? "#d93030" : "var(--gold)" }}>
-                    {w.level === "high" ? "❗" : "ⓘ"}
-                  </span>
-                  <div>
-                    <b>{w.type}</b>:{w.msg}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
 
       {/* 結算申報書 (試算結果) */}
       <OfficialFormView result={result} year={year} filing={filing} />
@@ -6731,7 +6624,7 @@ function OfficialFormView({ result, year, filing }) {
       <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
         {/* 左 2/3: 退稅/補繳大字 */}
         <div className="md:col-span-2 text-center p-6 rounded" style={{
-          background: finalDue > 0 ? "var(--ink)" : finalDue < 0 ? "var(--green)" : "#8a8578",
+          background: finalDue === 0 ? "#8a8578" : "var(--green)",
           color: "white",
         }}>
           <div className="ornament" style={{ color: "#a8a293" }}>
@@ -7055,7 +6948,7 @@ function ResultPanel({ result, year, members, filing }) {
           <div className="flex flex-col justify-between">
             <div>
               <div className="text-center p-6 rounded mb-4" style={{
-                background: result.finalDue > 0 ? "var(--ink)" : (result.finalDue < 0 ? "var(--green)" : "#8a8578"),
+                background: result.finalDue === 0 ? "#8a8578" : "var(--green)",
                 color: "white"
               }}>
                 <div className="ornament" style={{ color: "#a8a293" }}>
