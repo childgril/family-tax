@@ -6219,31 +6219,40 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   const overrideVal = filing.itemizedDeductions.overrides?.[r.key];
                   const hasOverride = overrideVal !== undefined && overrideVal !== null && overrideVal !== "";
                   const finalVal = hasOverride ? toNum(overrideVal) : r.auto;
+                  const actualExpr = filing.itemizedDeductions[`${r.actualField}Expr`];
                   return (
                     <tr key={r.key} style={{ borderBottom: "1px solid var(--line-soft)" }}>
                       <td className="px-3 py-2 text-xs">{r.label}</td>
                       <td className="px-2 py-1 text-right">
-                        <input type="number"
-                          className="input-text-plain text-sm w-full text-right num"
+                        <FormulaInput
+                          exprValue={actualExpr}
+                          value={r.actual}
+                          onChange={({ expr, value }) => {
+                            const newItemized = {
+                              ...filing.itemizedDeductions,
+                              [r.actualField]: value,
+                              [`${r.actualField}Expr`]: expr,
+                            };
+                            onChange({ ...filing, itemizedDeductions: newItemized });
+                          }}
                           placeholder="0"
-                          value={r.actual || ""}
-                          onChange={e => updateField(`itemizedDeductions.${r.actualField}`, Number(e.target.value) || 0)} />
+                        />
                       </td>
                       <td className="px-3 py-2 text-right num text-sm" style={{ color: hasOverride ? "var(--ink-mute)" : "var(--accent-deep)", textDecoration: hasOverride ? "line-through" : "none" }}>
                         {fmt(r.auto)}
                       </td>
                       <td className="px-2 py-1 text-right" style={{ background: "#fef9ec" }}>
-                        <input type="number"
-                          className="input-text-plain text-sm w-full text-right num"
-                          placeholder="留空 = 用系統"
+                        <input type="text" inputMode="numeric"
+                          className="input-text-plain text-sm w-full text-right num placeholder:text-[9px]"
+                          placeholder="覆寫"
                           value={hasOverride ? overrideVal : ""}
                           onChange={e => {
                             const newOverrides = { ...(filing.itemizedDeductions.overrides || {}) };
-                            const v = e.target.value;
+                            const v = e.target.value.replace(/[^\d-]/g, "");
                             if (v === "" || v === null) {
                               delete newOverrides[r.key];
                             } else {
-                              newOverrides[r.key] = Number(v) || 0;
+                              newOverrides[r.key] = toNum(v);
                             }
                             updateField("itemizedDeductions.overrides", newOverrides);
                           }} />
