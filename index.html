@@ -4791,7 +4791,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     const totalActualAnnual = rows.reduce((s, r) => s + r.actualAnnual, 0);
                     const totalDeclaredRent = rows.reduce((s, r) => s + r.declaredRent, 0);
                     const totalActualTaxable = rows.reduce((s, r) => s + r.actualTaxable, 0);
-                    const totalDeclaredTaxable = rows.reduce((s, r) => s + r.declaredTaxable, 0);
+                    // 申報應稅總計:採用 override 值
+                    const dtOverrides = filing.declaredTaxableOverrides || {};
+                    const totalDeclaredTaxable = rows.reduce((s, r) => {
+                      const o = dtOverrides[r.auditKey];
+                      const v = (o !== undefined && o !== null && o !== "") ? toNum(o) : r.declaredTaxable;
+                      return s + v;
+                    }, 0);
 
                     return (
                       <>
@@ -4840,11 +4846,52 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                             <td className="text-right px-2 py-1.5 num text-[11px]" style={{ color: "var(--ink-mute)" }}>
                               {fmt(r.actualTaxable)}
                             </td>
-                            <td className="text-right px-2 py-1.5 num font-medium" style={{
+                            <td className="text-right px-2 py-1.5 num" style={{
                               background: auditChecked ? "#e8f3dc" : "#f5fbef",
-                              color: r.isIncluded ? "var(--accent-deep)" : "var(--ink-mute)",
                             }}>
-                              {fmt(r.declaredTaxable)}
+                              {(() => {
+                                const overrides = filing.declaredTaxableOverrides || {};
+                                const hasOverride = overrides[r.auditKey] !== undefined && overrides[r.auditKey] !== null && overrides[r.auditKey] !== "";
+                                const displayVal = hasOverride ? toNum(overrides[r.auditKey]) : r.declaredTaxable;
+                                return (
+                                  <div className="flex items-center justify-end gap-1">
+                                    <input type="text" inputMode="numeric"
+                                      className="text-right text-xs num font-medium w-20 px-1 py-0.5 rounded"
+                                      style={{
+                                        background: "transparent",
+                                        border: hasOverride ? "1px dashed var(--gold)" : "1px dashed transparent",
+                                        color: r.isIncluded ? "var(--accent-deep)" : "var(--ink-mute)",
+                                      }}
+                                      value={hasOverride ? overrides[r.auditKey] : (r.isIncluded ? String(r.declaredTaxable) : "0")}
+                                      placeholder={String(r.declaredTaxable)}
+                                      onChange={e => {
+                                        const v = e.target.value.replace(/[^\d-]/g, "");
+                                        const next = { ...(filing.declaredTaxableOverrides || {}) };
+                                        // 若跟自動值相同,清掉 override
+                                        if (v === "" || toNum(v) === r.declaredTaxable) {
+                                          delete next[r.auditKey];
+                                        } else {
+                                          next[r.auditKey] = v;
+                                        }
+                                        onChange({ ...filing, declaredTaxableOverrides: next });
+                                      }}
+                                      title={hasOverride ? `自動值 ${fmt(r.declaredTaxable)} → 已覆寫` : "點擊修改"}
+                                    />
+                                    {hasOverride && (
+                                      <button
+                                        className="text-[9px] hover:underline"
+                                        style={{ color: "var(--ink-mute)" }}
+                                        onClick={() => {
+                                          const next = { ...(filing.declaredTaxableOverrides || {}) };
+                                          delete next[r.auditKey];
+                                          onChange({ ...filing, declaredTaxableOverrides: next });
+                                        }}
+                                        title="還原為自動值"
+                                      >↻</button>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </td>
                           </tr>
                           );
@@ -7004,8 +7051,8 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                 <table className="w-full text-xs" style={{ minWidth: "1000px" }}>
                   <thead>
                     <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--ink)" }}>
-                      <th className="px-2 py-2 text-left font-medium" style={{ minWidth: "100px" }}>所得類別</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "110px" }}>格式代號</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "82px" }}>所得類別</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "76px" }}>格式代號</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "180px" }}>所得發生處</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>統一編號</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>歸戶</th>
