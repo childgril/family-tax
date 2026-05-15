@@ -4667,11 +4667,14 @@ function FilingPage({ data, setData, year, setPage }) {
   }, [year, data.filings]);
 
   const addFiling = () => {
+    // 用第一位成員當預設主納稅人
+    const taxpayer = data.members[0];
+    const taxpayerName = taxpayer?.name || "";
     const newFiling = {
       id: uid(),
       year,
-      name: `${year}年度·新申報戶`,
-      taxpayerId: data.members[0]?.id || "",
+      name: taxpayerName ? `${year}年度·${taxpayerName}` : `${year}年度·新申報戶`,
+      taxpayerId: taxpayer?.id || "",
       spouseId: "",
       dependentIds: [],
       memberIncome: {},
@@ -5034,7 +5037,15 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         <div className="grid grid-cols-3 gap-3">
           <Field label="主納稅義務人">
             <select className="input-text-plain w-full" value={filing.taxpayerId}
-              onChange={e => onChange({ ...filing, taxpayerId: e.target.value })}>
+              onChange={e => {
+                const newTaxpayerId = e.target.value;
+                const taxpayer = members.find(m => m.id === newTaxpayerId);
+                const spouse = members.find(m => m.id === filing.spouseId);
+                const newName = taxpayer
+                  ? (spouse ? `${filing.year}年度·${taxpayer.name}&${spouse.name}` : `${filing.year}年度·${taxpayer.name}`)
+                  : filing.name;
+                onChange({ ...filing, taxpayerId: newTaxpayerId, name: newName });
+              }}>
               <option value="">— 請選擇 —</option>
               {members.map(m => {
                 const r = RELATIONS[m.relation];
@@ -5044,7 +5055,15 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
           </Field>
           <Field label="配偶 (合併申報)">
             <select className="input-text-plain w-full" value={filing.spouseId || ""}
-              onChange={e => onChange({ ...filing, spouseId: e.target.value })}>
+              onChange={e => {
+                const newSpouseId = e.target.value;
+                const taxpayer = members.find(m => m.id === filing.taxpayerId);
+                const spouse = members.find(m => m.id === newSpouseId);
+                const newName = taxpayer
+                  ? (spouse ? `${filing.year}年度·${taxpayer.name}&${spouse.name}` : `${filing.year}年度·${taxpayer.name}`)
+                  : filing.name;
+                onChange({ ...filing, spouseId: newSpouseId, name: newName });
+              }}>
               <option value="">無 (單身申報)</option>
               {members.filter(m => m.id !== filing.taxpayerId).map(m => {
                 const r = RELATIONS[m.relation];
@@ -5112,13 +5131,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         </div>
       )}
 
-      {/* 申報書筆數核對 (從申報書 PDF 抄入,自動比對逐筆明細) */}
-      <OfficialAuditPanel
-        filing={filing}
-        entries={incomeEntries}
-        onChange={onChange}
-      />
-
       {/* 逐筆所得明細 (依官方申報書格式) */}
       <IncomeEntriesTable
         entries={incomeEntries}
@@ -5142,46 +5154,74 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               </span>
               <div>
                 <div className="ornament" style={{ color: "var(--accent-deep)" }}>RENTAL RECORDS</div>
-                <div className="font-serif text-base">🏠 {year} 年租賃紀錄</div>
+                <div className="font-serif text-base">🏠 {year} 年租賃紀錄輸入</div>
               </div>
             </div>
-            <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-              <button
-                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
-                style={{ color: "var(--ink-soft)", border: "1px solid var(--line)" }}
-                onClick={() => {
-                  setRentalForceState(false);
-                  setRentalExpandKey(k => k + 1);
-                }}
-                title="把所有物件明細收起"
-              >
-                ⊟ 全部收合
-              </button>
-              <button
-                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
-                style={{ color: "var(--ink-soft)", border: "1px solid var(--line)" }}
-                onClick={() => {
-                  setRentalForceState(true);
-                  setRentalExpandKey(k => k + 1);
-                }}
-                title="把所有物件明細展開"
-              >
-                ⊞ 全部展開
-              </button>
-              <button
-                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
-                style={{ color: "var(--ink-mute)" }}
-                onClick={() => {
-                  setRentalForceState(null);
-                  setRentalExpandKey(k => k + 1);
-                }}
-                title="恢復預設(有合約自動展開)"
-              >
-                ↻
-              </button>
-              <span className="text-xs ml-2" style={{ color: "var(--ink-mute)" }}>
-                依合約自動攤分,可勾選計入 / 手動覆寫金額
-              </span>
+            <div className="text-right" onClick={e => e.stopPropagation()}>
+              {(() => {
+                // 計算每人 (本人/配偶/扶養親屬) 的申報租金 + 申報應稅總額
+                const perMember = {};  // {memberId: {name, declaredRent, declaredTaxable}}
+                const filerIds = [filing.taxpayerId, filing.spouseId, ...(filing.dependentIds || [])].filter(Boolean);
+                filerIds.forEach(mid => {
+                  const m = members.find(mm => mm.id === mid);
+                  if (m) perMember[mid] = { name: m.name, declaredRent: 0, declaredTaxable: 0 };
+                });
+                householdProperties.forEach(p => {
+                  const mid = p.ownerId;
+                  if (!perMember[mid]) return;
+                  const agg = aggregateContractsForYear(contracts, p.id, year, filing.manualRentOverrides);
+                  const overrideKey = `${p.id}_${year}`;
+                  const propOverride = (filing.manualRentOverrides || {})[overrideKey] || {};
+                  const isIncluded = propOverride.includeInFiling === true;
+                  if (!isIncluded) return;
+                  const isLand = p.assetType === "land";
+                  const calcTaxableFor = (annualValue, isPub) => {
+                    const comp = {
+                      type: isPub ? "public" : (isLand ? "land" : "general"),
+                      monthlyRent: 0, months: 12,
+                      annualRentDirect: annualValue,
+                      landTax: toNum(p.landTax || 0),
+                      expenseRatio: 0.43,
+                    };
+                    return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
+                  };
+                  const dtOverrides = filing.declaredTaxableOverrides || {};
+
+                  if (agg.anyContractInYear && agg.contracts.length > 0) {
+                    agg.contracts.filter(c => c.months > 0).forEach(c => {
+                      const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                      perMember[mid].declaredRent += appliedAnnual;
+                      const auditKey = `c_${c.contractId}_${year}`;
+                      const ov = dtOverrides[auditKey];
+                      const taxable = (ov !== undefined && ov !== null && ov !== "")
+                        ? toNum(ov)
+                        : calcTaxableFor(appliedAnnual, c.isPublic);
+                      perMember[mid].declaredTaxable += taxable;
+                    });
+                  } else {
+                    // 沒合約看 declared override
+                    const auditKey = `n_${p.id}_${year}`;
+                    const ov = dtOverrides[auditKey];
+                    if (ov !== undefined && ov !== null && ov !== "") {
+                      perMember[mid].declaredTaxable += toNum(ov);
+                    }
+                  }
+                });
+                const list = Object.values(perMember).filter(p => p.declaredRent > 0 || p.declaredTaxable > 0);
+                if (list.length === 0) {
+                  return <span className="text-xs" style={{ color: "var(--ink-mute)" }}>尚未勾選計入</span>;
+                }
+                return (
+                  <>
+                    <div className="text-[10px] mb-0.5" style={{ color: "var(--ink-mute)" }}>
+                      申報租金:{list.map(p => `${p.name} ${fmt(p.declaredRent)}`).join(" · ")}
+                    </div>
+                    <div className="text-[10px]" style={{ color: "var(--accent-deep)" }}>
+                      申報應稅:{list.map(p => `${p.name} ${fmt(p.declaredTaxable)}`).join(" · ")}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
 
@@ -5462,6 +5502,48 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             <div className="mt-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
               ⓘ <b>所得總額</b> 會自動計入 ① 各成員所得 → 綜合所得總額。對照申報書的「租賃所得」明細表,合計數應一致。
               若不一致,請檢查:1) 合約租期是否完全落在 {year} 年度 2) 月租金是否正確 3) 是否漏建合約。
+            </div>
+          </div>
+
+          {/* 全部收合/展開 操作按鈕 (放在對照表下方、勾選物件清單上方) */}
+          <div className="px-5 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line-soft)", background: "#fdfcf7" }}>
+            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+              ↓ 勾選下方物件以計入申報
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
+                style={{ color: "var(--ink-soft)", border: "1px solid var(--line)" }}
+                onClick={() => {
+                  setRentalForceState(false);
+                  setRentalExpandKey(k => k + 1);
+                }}
+                title="把所有物件明細收起"
+              >
+                ⊟ 全部收合
+              </button>
+              <button
+                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
+                style={{ color: "var(--ink-soft)", border: "1px solid var(--line)" }}
+                onClick={() => {
+                  setRentalForceState(true);
+                  setRentalExpandKey(k => k + 1);
+                }}
+                title="把所有物件明細展開"
+              >
+                ⊞ 全部展開
+              </button>
+              <button
+                className="text-xs px-2 py-1 rounded hover:bg-gray-100"
+                style={{ color: "var(--ink-mute)" }}
+                onClick={() => {
+                  setRentalForceState(null);
+                  setRentalExpandKey(k => k + 1);
+                }}
+                title="恢復預設(有合約自動展開)"
+              >
+                ↻
+              </button>
             </div>
           </div>
 
@@ -7479,7 +7561,7 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
 }
 
 function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
-  const [expanded, setExpanded] = React.useState(entries.length > 0);
+  const [expanded, setExpanded] = React.useState(true);  // 預設展開
   const [filter, setFilter] = React.useState("all");
   const [memberFilter, setMemberFilter] = React.useState("all");
   const [groupByMember, setGroupByMember] = React.useState(true);
