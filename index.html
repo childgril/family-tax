@@ -1546,6 +1546,7 @@ const SAMPLE_DATA = {
   properties: [],
   rentalRecords: [], // 舊版相容: {id, propertyId, year, monthlyRent, months, type, includeInFiling, ...}
   contracts: [],     // 新版: {id, propertyId, tenantName, tenantPhone, startDate, endDate, monthlyRent, managementFee, deposit, landlordOwner, isPublicLandlord, publicLandlordName, publicLandlordAmount, publicLandlordPeriod, note}
+  payerDirectory: {}, // 扣繳單位通訊錄: {taxId: name} (從每筆 entries 自動累積)
   meta: { lastSavedAt: null, version: 3 },
 };
 
@@ -4878,6 +4879,13 @@ function FilingPage({ data, setData, year, setPage }) {
               setRentalRecords={(next) => setData({ ...data, rentalRecords: next })}
               contracts={data.contracts || []}
               setContracts={(next) => setData({ ...data, contracts: next })}
+              payerDirectory={data.payerDirectory || {}}
+              savePayer={(taxId, name) => {
+                if (!taxId || !name) return;
+                const dir = data.payerDirectory || {};
+                if (dir[taxId] === name) return;  // 沒變化
+                setData({ ...data, payerDirectory: { ...dir, [taxId]: name } });
+              }}
               year={year}
               onChange={updateFiling}
               onDelete={() => deleteFiling(selected.id)}
@@ -4889,7 +4897,7 @@ function FilingPage({ data, setData, year, setPage }) {
   );
 }
 
-function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, year, onChange: rawOnChange, onDelete }) {
+function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, payerDirectory, savePayer, year, onChange: rawOnChange, onDelete }) {
   // 鎖定時攔截所有 onChange,只允許「解鎖」操作通過 (locked: false)
   const onChange = (next) => {
     if (filing.locked && next.locked !== false) {
@@ -5238,6 +5246,8 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         onAdd={addEntry}
         onUpdate={updateEntry}
         onRemove={removeEntry}
+        payerDirectory={payerDirectory}
+        savePayer={savePayer}
       />
 
       {/* 本戶租賃 — 合約自動攤分,每物件可展開查看與手動覆寫 */}
@@ -7555,9 +7565,16 @@ function codeQualifiesFor85Credit(code) {
   const c = String(code).trim().toUpperCase();
   return c === "54" || c === "54C";
 }
-function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, groupByMember) {
+function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, groupByMember, payerDirectory, onSavePayer) {
   const cat = CATEGORIES[e.category];
   const net = computeEntryNet(e);
+  // helper: 看名稱反查統編 / 統編反查名稱
+  const lookupName = (taxId) => payerDirectory && payerDirectory[taxId];
+  const lookupTaxId = (name) => {
+    if (!payerDirectory || !name) return null;
+    const found = Object.entries(payerDirectory).find(([, n]) => n === name);
+    return found ? found[0] : null;
+  };
   return (
     <tr key={e.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
       <td className="px-2 py-1">
@@ -7605,13 +7622,53 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
       </td>
       <td className="px-2 py-1">
         <input className="input-text-plain text-xs w-full" value={e.source || ""}
-          onChange={ev => onUpdate(e.id, { source: ev.target.value })}
+          list={`payerNames_${e.id}`}
+          onChange={ev => {
+            const name = ev.target.value;
+            // 反查統編
+            const matchedTaxId = lookupTaxId(name);
+            const patch = { source: name };
+            if (matchedTaxId && !e.taxId) patch.taxId = matchedTaxId;
+            onUpdate(e.id, patch);
+          }}
+          onBlur={ev => {
+            // 失焦時:若統編 + 名稱都有 → 存入 directory
+            if (e.taxId && ev.target.value && onSavePayer) {
+              onSavePayer(e.taxId, ev.target.value);
+            }
+          }}
           placeholder="例:鴻海精密" />
+        <datalist id={`payerNames_${e.id}`}>
+          {payerDirectory && Object.entries(payerDirectory).map(([taxId, name]) => (
+            <option key={taxId} value={name}>{taxId}</option>
+          ))}
+        </datalist>
       </td>
       <td className="px-2 py-1">
         <input className="input-text-plain text-xs w-full num" value={e.taxId || ""}
-          onChange={ev => onUpdate(e.id, { taxId: ev.target.value })}
+          list={`payerTaxIds_${e.id}`}
+          onChange={ev => {
+            const taxId = ev.target.value.replace(/[^\d]/g, "");
+            const patch = { taxId };
+            // 帶出名稱 (只在 source 沒填時)
+            if (taxId.length === 8) {
+              const matchedName = lookupName(taxId);
+              if (matchedName && !e.source) patch.source = matchedName;
+            }
+            onUpdate(e.id, patch);
+          }}
+          onBlur={ev => {
+            // 失焦時:若統編 + 名稱都有 → 存入 directory
+            if (ev.target.value && e.source && onSavePayer) {
+              onSavePayer(ev.target.value, e.source);
+            }
+          }}
           placeholder="統編" />
+        <datalist id={`payerTaxIds_${e.id}`}>
+          {payerDirectory && Object.entries(payerDirectory).map(([taxId, name]) => (
+            <option key={taxId} value={taxId}>{name}</option>
+          ))}
+        </datalist>
       </td>
       {!groupByMember && (
         <td className="px-2 py-1">
@@ -7661,7 +7718,7 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
   );
 }
 
-function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
+function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove, payerDirectory, savePayer }) {
   const [expanded, setExpanded] = React.useState(true);  // 預設展開
   const [filter, setFilter] = React.useState("all");
   const [memberFilter, setMemberFilter] = React.useState("all");
@@ -7813,25 +7870,25 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
               )}
 
               <div className="overflow-x-auto">
-                <table className="w-full text-xs" style={{ minWidth: "1000px" }}>
+                <table className="w-full text-xs" style={{ minWidth: "1100px" }}>
                   <thead>
                     <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--ink)" }}>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "110px" }}>所得類別</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "60px" }}>格式代號</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "180px" }}>所得發生處</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>統一編號</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>格式代號</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "210px" }}>扣繳單位</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "110px" }}>統一編號</th>
                       {!groupByMember && (
                         <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>歸戶</th>
                       )}
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "200px" }}>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "220px" }}>
                         給付/收入
                         <div className="text-[9px] font-normal" style={{ color: "var(--ink-mute)" }}>
                           可填算式 (如 180000+36000)
                         </div>
                       </th>
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>必要費用</th>
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>所得總額</th>
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "90px" }}>扣繳稅額</th>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "110px" }}>必要費用</th>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "110px" }}>所得總額</th>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>扣繳稅額</th>
                       <th className="px-2 py-2 text-center font-medium" style={{ width: "40px" }}></th>
                     </tr>
                   </thead>
@@ -7839,7 +7896,7 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                     {(() => {
                       // 如果勾選分組,先按成員分;否則按原順序
                       if (!groupByMember) {
-                        return visibleEntries.map(e => renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, false));
+                        return visibleEntries.map(e => renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, false, payerDirectory, savePayer));
                       }
                       // 按成員分組:把同一成員的列放一起,中間插分隔列
                       const memberGroups = {};
@@ -7864,7 +7921,7 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove }) {
                             </td>
                           </tr>
                         );
-                        grpItems.forEach(e => rows.push(renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, true)));
+                        grpItems.forEach(e => rows.push(renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, true, payerDirectory, savePayer)));
                       });
                       return rows;
                     })()}
@@ -9955,7 +10012,7 @@ function App() {
     <div className="flex min-h-screen">
       <Sidebar current={page} onNav={setPage} year={year} onYearChange={setYear} data={data} />
       <main className="flex-1 overflow-y-auto" style={{ background: "var(--bg)" }}>
-        <div className="p-8 max-w-[1400px] mx-auto">
+        <div className="p-8 max-w-[1800px] mx-auto">
           {page === "dashboard" && <Dashboard {...props} />}
           {page === "members" && <MembersPage {...props} />}
           {page === "properties" && <PropertiesPage {...props} />}
