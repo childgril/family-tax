@@ -2319,8 +2319,8 @@ function Dashboard({ data, year, setPage }) {
                         <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>淨所得</th>
                         <th className="text-center px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>稅率</th>
                         <th className="text-center px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>扣除額方式</th>
-                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>應納稅額</th>
-                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>應補繳/退稅</th>
+                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#f5fbef" }}>實際應稅/退稅</th>
+                        <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fef9ec" }}>補繳/退稅<br/><span className="text-[9px] font-normal">(政府調整)</span></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2329,6 +2329,12 @@ function Dashboard({ data, year, setPage }) {
                         const actual = filing.actualSettlement?.actualAmount;
                         const hasActual = actual !== undefined && actual !== "" && actual !== null;
                         const fd = hasActual ? toNum(actual) : sysFd;
+                        // 後續政府調整 (補繳/罰金/利息正 / 退稅負)
+                        const adjustments = filing.adjustments || [];
+                        const adjTotal = adjustments.reduce((s, a) => {
+                          const v = toNum(a.amount);
+                          return a.type === "refund_received" ? s - v : s + v;
+                        }, 0);
                         return (
                           <tr key={filing.id} className="table-row" style={{ borderBottom: "1px solid var(--line-soft)" }}>
                             <td className="px-3 py-2">
@@ -2350,10 +2356,22 @@ function Dashboard({ data, year, setPage }) {
                                 {result?.useItemized ? "列舉" : "標準"}
                               </span>
                             </td>
-                            <td className="px-3 py-2 text-right num">{fmt(result?.tax || 0)}</td>
-                            <td className="px-3 py-2 text-right num font-medium" style={{ color: fd > 0 ? "var(--accent-deep)" : fd < 0 ? "var(--green)" : "var(--ink-mute)" }}>
+                            <td className="px-3 py-2 text-right num font-medium" style={{
+                              background: "#f5fbef",
+                              color: fd > 0 ? "var(--accent-deep)" : fd < 0 ? "var(--green)" : "var(--ink-mute)",
+                            }}>
                               {fd === 0 ? "0" : fd > 0 ? `補 ${fmt(fd)}` : `退 ${fmt(-fd)}`}
                               {hasActual && <span className="chip chip-green text-[9px] ml-1">實</span>}
+                            </td>
+                            <td className="px-3 py-2 text-right num" style={{
+                              background: "#fef9ec",
+                              color: adjTotal > 0 ? "var(--accent-deep)" : adjTotal < 0 ? "var(--green)" : "var(--ink-mute)",
+                            }}>
+                              {adjTotal === 0
+                                ? <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>—</span>
+                                : adjTotal > 0
+                                  ? <>補 {fmt(adjTotal)}<div className="text-[9px] font-normal" style={{ color: "var(--ink-mute)" }}>{adjustments.length} 筆</div></>
+                                  : <>退 {fmt(-adjTotal)}<div className="text-[9px] font-normal" style={{ color: "var(--ink-mute)" }}>{adjustments.length} 筆</div></>}
                             </td>
                           </tr>
                         );
