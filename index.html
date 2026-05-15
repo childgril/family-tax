@@ -4692,7 +4692,7 @@ function FilingPage({ data, setData, year, setPage }) {
     const newFiling = {
       id: uid(),
       year,
-      name: taxpayerName ? `${year}年度·${taxpayerName}` : `${year}年度·新申報戶`,
+      name: taxpayerName ? `${year}年-${taxpayerName}` : `${year}年-新申報戶`,
       taxpayerId: taxpayer?.id || "",
       spouseId: "",
       dependentIds: [],
@@ -4890,9 +4890,29 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
     }
     rawOnChange(next);
   };
-  // 鎖定時讓 setProperties / setRentalRecords / setContracts 也被攔下
-  // (這些是全局,不限於本 filing — 但鎖定通常代表此申報戶確定不再動,連帶這些也保護)
-  // 暫時保留可動,只攔 filing 本體更新
+
+  // 自動同步名字:依目前主納稅人 + 配偶生成「{year}年-{主納稅人}&{配偶}」格式
+  // 規則:舊格式(N年度·XXX、N年度·新申報戶) → 自動覆蓋
+  //       但如果使用者自己手動改了非標準名字,不動
+  const taxpayerObj = members.find(m => m.id === filing.taxpayerId);
+  const spouseObj = members.find(m => m.id === filing.spouseId);
+  const expectedName = taxpayerObj
+    ? (spouseObj ? `${filing.year}年-${taxpayerObj.name}&${spouseObj.name}` : `${filing.year}年-${taxpayerObj.name}`)
+    : `${filing.year}年-新申報戶`;
+  // 判斷是否「舊自動格式」(可被自動覆蓋)
+  const isOldAutoName = filing.name && (
+    /^\d+年度·新申報戶$/.test(filing.name) ||
+    /^\d+年度·[^·]+$/.test(filing.name) ||
+    /^\d+年-新申報戶$/.test(filing.name) ||
+    // 新格式但 taxpayer/spouse 改了 → 也要同步
+    (taxpayerObj && /^\d+年-/.test(filing.name) && filing.name !== expectedName)
+  );
+  React.useEffect(() => {
+    if (filing.locked) return;
+    if (isOldAutoName && filing.name !== expectedName) {
+      rawOnChange({ ...filing, name: expectedName });
+    }
+  }, [filing.id, filing.name, expectedName]);
 
   const [newPropertyModal, setNewPropertyModal] = React.useState(null); // 新增物件 modal
   const [rentalExpandKey, setRentalExpandKey] = React.useState(0); // 強制 re-render 用
@@ -5114,7 +5134,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                 const taxpayer = members.find(m => m.id === newTaxpayerId);
                 const spouse = members.find(m => m.id === filing.spouseId);
                 const newName = taxpayer
-                  ? (spouse ? `${filing.year}年度·${taxpayer.name}&${spouse.name}` : `${filing.year}年度·${taxpayer.name}`)
+                  ? (spouse ? `${filing.year}年-${taxpayer.name}&${spouse.name}` : `${filing.year}年-${taxpayer.name}`)
                   : filing.name;
                 onChange({ ...filing, taxpayerId: newTaxpayerId, name: newName });
               }}>
@@ -5132,7 +5152,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                 const taxpayer = members.find(m => m.id === filing.taxpayerId);
                 const spouse = members.find(m => m.id === newSpouseId);
                 const newName = taxpayer
-                  ? (spouse ? `${filing.year}年度·${taxpayer.name}&${spouse.name}` : `${filing.year}年度·${taxpayer.name}`)
+                  ? (spouse ? `${filing.year}年-${taxpayer.name}&${spouse.name}` : `${filing.year}年-${taxpayer.name}`)
                   : filing.name;
                 onChange({ ...filing, spouseId: newSpouseId, name: newName });
               }}>
