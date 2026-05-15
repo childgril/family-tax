@@ -4162,6 +4162,8 @@ function FilingPage({ data, setData, year, setPage }) {
       },
       // 事後調整 (補繳、罰金、利息、複查通知書等)
       adjustments: [],
+      // 申報書筆數核對 (從申報書 PDF 抄入,系統自動跟逐筆明細比對)
+      officialAudit: [],   // [{id, code, count, amount}]
     };
     setData({ ...data, filings: [...data.filings, newFiling] });
     setSelectedId(newFiling.id);
@@ -4572,6 +4574,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
           </div>
         </div>
       )}
+
+      {/* 申報書筆數核對 (從申報書 PDF 抄入,自動比對逐筆明細) */}
+      <OfficialAuditPanel
+        filing={filing}
+        entries={incomeEntries}
+        onChange={onChange}
+      />
 
       {/* 逐筆所得明細 (依官方申報書格式) */}
       <IncomeEntriesTable
@@ -5971,6 +5980,217 @@ function CollapsibleCard({ title, subtitle, headerExtra, children, defaultOpen =
         </div>
       </div>
       {open && children}
+    </div>
+  );
+}
+
+function OfficialAuditPanel({ filing, entries, onChange }) {
+  const audits = filing.officialAudit || [];
+  const [collapsed, setCollapsed] = React.useState(true);
+
+  const updateAudits = (next) => onChange({ ...filing, officialAudit: next });
+  const addAudit = () => updateAudits([...audits, { id: uid(), code: "", count: "", amount: "" }]);
+  const updateAudit = (id, patch) => updateAudits(audits.map(a => a.id === id ? { ...a, ...patch } : a));
+  const removeAudit = (id) => updateAudits(audits.filter(a => a.id !== id));
+
+  // 依代號統計系統的逐筆明細 (code -> {count, amount})
+  const systemByCode = {};
+  entries.forEach(e => {
+    const code = (e.code || "").toUpperCase().trim();
+    if (!code) return;
+    if (!systemByCode[code]) systemByCode[code] = { count: 0, amount: 0 };
+    systemByCode[code].count += 1;
+    systemByCode[code].amount += toNum(e.netAmount);  // 所得總額 (扣完費用)
+  });
+
+  // 找出系統有,但 audit 沒對的代號 (給「智慧建議」用)
+  const missingCodes = Object.keys(systemByCode).filter(code => !audits.some(a => (a.code || "").toUpperCase().trim() === code));
+
+  // 合計
+  const totalAuditCount = audits.reduce((s, a) => s + toNum(a.count), 0);
+  const totalAuditAmount = audits.reduce((s, a) => s + toNum(a.amount), 0);
+  const totalSysCount = audits.reduce((s, a) => {
+    const code = (a.code || "").toUpperCase().trim();
+    return s + (systemByCode[code]?.count || 0);
+  }, 0);
+  const totalSysAmount = audits.reduce((s, a) => {
+    const code = (a.code || "").toUpperCase().trim();
+    return s + (systemByCode[code]?.amount || 0);
+  }, 0);
+
+  return (
+    <div className="card" style={{ borderColor: "#c08040" }}>
+      <div
+        className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-orange-50"
+        style={{ borderBottom: collapsed ? "none" : "1px solid var(--line)", background: "#fef5eb" }}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <div className="flex items-center gap-2 flex-1">
+          <span className="text-xs" style={{ color: "#c08040", minWidth: "12px" }}>
+            {collapsed ? "▶" : "▼"}
+          </span>
+          <div>
+            <div className="ornament" style={{ color: "#c08040" }}>OFFICIAL AUDIT</div>
+            <div className="font-serif text-base">📋 申報書筆數核對 <span className="text-xs ml-2" style={{ color: "var(--ink-mute)" }}>(從申報書 PDF 逐項抄入,自動跟下方逐筆明細比對)</span></div>
+          </div>
+        </div>
+        {audits.length > 0 && !collapsed && (
+          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+            {audits.length} 類核對中
+          </div>
+        )}
+      </div>
+
+      {!collapsed && (
+        <div className="p-4">
+          {audits.length === 0 ? (
+            <div className="text-center py-6 text-xs" style={{ color: "var(--ink-mute)" }}>
+              尚未建立核對紀錄。從申報書 PDF「所得明細」頁逐類抄入,系統會自動跟下方逐筆明細的所得總額比對。
+              <div className="mt-3">
+                <button className="btn-primary text-xs" onClick={addAudit}>+ 新增第一筆核對</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
+                    <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "70px" }}>代號</th>
+                    <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>類別</th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "70px" }}>申報書<br/>筆數</th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>申報書<br/>金額</th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "70px", background: "#f5fbef" }}>系統<br/>筆數</th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px", background: "#f5fbef" }}>系統<br/>金額</th>
+                    <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>差異</th>
+                    <th className="px-1 py-1.5 w-8"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {audits.map(a => {
+                    const code = (a.code || "").toUpperCase().trim();
+                    const auditCount = toNum(a.count);
+                    const auditAmount = toNum(a.amount);
+                    const sys = systemByCode[code] || { count: 0, amount: 0 };
+                    const countDiff = auditCount - sys.count;
+                    const amountDiff = auditAmount - sys.amount;
+                    const codeInfo = INCOME_CODES[code];
+                    const label = codeInfo ? codeInfo.label : (code ? "未知代號" : "—");
+
+                    // 狀態判定
+                    let status = "ok", statusText = "✓ 一致", statusColor = "var(--green)";
+                    if (!code) {
+                      status = "incomplete"; statusText = "請填代號"; statusColor = "var(--ink-mute)";
+                    } else if (countDiff !== 0 && amountDiff !== 0) {
+                      status = "both";
+                      statusText = `⚠ 差 ${countDiff > 0 ? "+" : ""}${countDiff} 筆 / ${amountDiff > 0 ? "+" : ""}${fmt(amountDiff)}`;
+                      statusColor = Math.abs(amountDiff) > 100 ? "#c53030" : "var(--gold)";
+                    } else if (countDiff !== 0) {
+                      status = "count";
+                      statusText = `⚠ 筆數差 ${countDiff > 0 ? "+" : ""}${countDiff}`;
+                      statusColor = "var(--gold)";
+                    } else if (amountDiff !== 0) {
+                      status = "amount";
+                      statusText = `⚠ 金額差 ${amountDiff > 0 ? "+" : ""}${fmt(amountDiff)}`;
+                      statusColor = Math.abs(amountDiff) > 100 ? "#c53030" : "var(--gold)";
+                    }
+
+                    return (
+                      <tr key={a.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                        <td className="px-2 py-1.5">
+                          <input type="text"
+                            className="input-text-plain text-xs w-full num"
+                            placeholder="如 5A"
+                            value={a.code || ""}
+                            onChange={e => updateAudit(a.id, { code: e.target.value.toUpperCase() })} />
+                        </td>
+                        <td className="px-2 py-1.5 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                          {label}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="text" inputMode="numeric"
+                            className="input-text-plain text-xs w-full text-right num"
+                            placeholder="0"
+                            value={a.count || ""}
+                            onChange={e => updateAudit(a.id, { count: e.target.value.replace(/[^\d]/g, "") })} />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="text" inputMode="numeric"
+                            className="input-text-plain text-xs w-full text-right num"
+                            placeholder="0"
+                            value={a.amount || ""}
+                            onChange={e => updateAudit(a.id, { amount: e.target.value.replace(/[^\d-]/g, "") })} />
+                        </td>
+                        <td className="px-2 py-1.5 text-right num text-xs" style={{ background: "#f5fbef" }}>
+                          {sys.count}
+                        </td>
+                        <td className="px-2 py-1.5 text-right num text-xs" style={{ background: "#f5fbef" }}>
+                          {fmt(sys.amount)}
+                        </td>
+                        <td className="px-2 py-1.5 text-[10px]" style={{ color: statusColor }}>
+                          {statusText}
+                        </td>
+                        <td className="px-1 py-1.5 text-center">
+                          <button className="text-red-600 text-xs hover:underline"
+                            onClick={() => removeAudit(a.id)}>×</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {/* 合計列 */}
+                  <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
+                    <td colSpan={2} className="text-right px-2 py-2 font-medium text-xs">合計</td>
+                    <td className="text-right px-2 py-2 num font-medium">{totalAuditCount}</td>
+                    <td className="text-right px-2 py-2 num font-medium">{fmt(totalAuditAmount)}</td>
+                    <td className="text-right px-2 py-2 num font-medium" style={{ background: "#f5fbef" }}>{totalSysCount}</td>
+                    <td className="text-right px-2 py-2 num font-medium" style={{ background: "#f5fbef" }}>{fmt(totalSysAmount)}</td>
+                    <td className="px-2 py-2 text-[11px]" style={{
+                      color: (totalAuditCount === totalSysCount && totalAuditAmount === totalSysAmount) ? "var(--green)" : "#c53030",
+                    }}>
+                      {totalAuditCount === totalSysCount && totalAuditAmount === totalSysAmount
+                        ? "✓ 全部對上"
+                        : `差 ${totalAuditCount - totalSysCount} 筆 / ${fmt(totalAuditAmount - totalSysAmount)}`}
+                    </td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div className="mt-3 flex items-center justify-between">
+                <button className="text-xs px-3 py-1.5 rounded hover:bg-gray-100"
+                  style={{ border: "1px dashed var(--accent)", color: "var(--accent-deep)" }}
+                  onClick={addAudit}>
+                  + 新增類別
+                </button>
+
+                {/* 智慧建議:系統有但 audit 沒列的代號 */}
+                {missingCodes.length > 0 && (
+                  <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                    💡 系統還有這些代號未核對:
+                    {missingCodes.map(code => (
+                      <button key={code} className="ml-1 px-1.5 py-0.5 rounded hover:bg-orange-100"
+                        style={{ border: "1px solid var(--line)", color: "var(--accent-deep)" }}
+                        onClick={() => updateAudits([...audits, { id: uid(), code, count: "", amount: "" }])}>
+                        + {code}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          <div className="mt-3 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+            ⓘ 從申報書 PDF「所得明細」頁逐類抄入(類別 / 筆數 / 該類所得總額)。
+            系統會自動跟下方「逐筆所得明細」按代號比對:
+            <ul className="list-disc list-inside ml-2 mt-1 space-y-0.5">
+              <li><b>筆數不對</b> → 表示有漏輸入或多輸入</li>
+              <li><b>金額差距大</b> → 表示某筆所得金額打錯</li>
+              <li><b>差異 1~5 元</b> → 通常是四捨五入,可忽略</li>
+            </ul>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
