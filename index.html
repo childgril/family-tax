@@ -1117,32 +1117,57 @@ function computeTaxForFiling(filing, members, year) {
   const disaster = toNum(itemized.disaster);                   // 災害損失
   const mortgageInterest = toNum(itemized.mortgageInterest);   // 自用住宅購屋借款利息
 
+  // 手動覆寫 (使用者直接指定「可扣除」金額,優先於系統自動算上限)
+  // 規則:若有設定 override 且 ≥ 0 → 使用 override;否則用系統算
+  const itemizedOverrides = itemized.overrides || {};
+  const applyOverride = (key, autoValue) => {
+    const o = itemizedOverrides[key];
+    if (o !== undefined && o !== null && o !== "") return toNum(o);
+    return autoValue;
+  };
+
   // 捐贈上限: 一般捐贈不得超過「綜合所得總額」 20%
   // 注意:官方申報書「綜合所得總額」是「薪資已扣特扣後」的數字,所以 20% 上限要用扣完薪資特扣的金額
   const grossIncomeForDonation = grossIncome - salaryDeductible;
-  const donationGeneralCapped = Math.min(donationGeneral, grossIncomeForDonation * 0.20);
+  const donationGeneralCappedAuto = Math.min(donationGeneral, grossIncomeForDonation * 0.20);
 
   // 保險費上限: 每人 24,000;若某人實際 < 24,000 則只能扣實際 (不可互相分配)
   // 規則:每一被保險人 × min(實際, 24,000) 後加總 = 可扣除
-  let insurancePersonalCapped;
+  let insurancePersonalCappedAuto;
   let insurancePersonalHasPerMember = false;
   const perMemberKeys = Object.keys(insurancePersonalByMember).filter(k => toNum(insurancePersonalByMember[k]) > 0);
   if (perMemberKeys.length > 0) {
     // 使用者已逐人輸入 → 每人各自套 24,000 上限
     insurancePersonalHasPerMember = true;
-    insurancePersonalCapped = perMemberKeys.reduce((s, k) => {
+    insurancePersonalCappedAuto = perMemberKeys.reduce((s, k) => {
       const amt = toNum(insurancePersonalByMember[k]);
       return s + Math.min(amt, params.insuranceLimit);
     }, 0);
   } else {
     // 舊版相容:整戶總額,以 "申報戶人數 × 24,000" 為上限 (但這會略高估,使用者應改用逐人輸入)
-    insurancePersonalCapped = Math.min(insurancePersonal, filers.length * params.insuranceLimit);
+    insurancePersonalCappedAuto = Math.min(insurancePersonal, filers.length * params.insuranceLimit);
   }
 
+  // 房貸利息: 實際金額 − 儲蓄投資扣除額 (儲蓄會先扣完);上限 30 萬
+  const mortgageInterestCappedAuto = Math.min(
+    Math.max(0, mortgageInterest - 0),  // 儲蓄要在外面扣 (這裡先給原值)
+    params.mortgageLimit
+  );
+
+  // 套用覆寫 (使用者直接填可扣除金額時)
+  const donationGeneralCapped = applyOverride("donationGeneral", donationGeneralCappedAuto);
+  const donationUnlimitedCapped = applyOverride("donationUnlimited", donationUnlimited);
+  const insurancePersonalCapped = applyOverride("insurancePersonal", insurancePersonalCappedAuto);
+  const insuranceHealthCapped = applyOverride("insuranceHealth", insuranceHealth);
+  const medicalCapped = applyOverride("medical", medical);
+  const disasterCapped = applyOverride("disaster", disaster);
+  // 房貸的最終扣除值在 actualMortgage 計算 (含 30 萬上限);此處保留原始值
+
   const itemizedTotal =
-    donationGeneralCapped + donationUnlimited +
-    insurancePersonalCapped + insuranceHealth +
-    medical + disaster + mortgageInterest;
+    donationGeneralCapped + donationUnlimitedCapped +
+    insurancePersonalCapped + insuranceHealthCapped +
+    medicalCapped + disasterCapped + mortgageInterest;
+    // 註:mortgageInterest 在後面會被 actualMortgage 取代
 
   const useItemized = filing.deductionChoice === "itemized" ||
     (filing.deductionChoice === "auto" && itemizedTotal > standardDeduction);
@@ -1186,13 +1211,14 @@ function computeTaxForFiling(filing, members, year) {
   // 自用住宅購屋借款利息: 真實扣除額 = max(0, 利息 - 儲蓄投資扣除額)
   // 但因為儲蓄投資已在特扣處理,這裡列舉時要扣除
   // (簡化處理: 若選列舉且利息支出 > savings,實際可列 = 利息 - savings,上限30萬)
-  let actualMortgage = 0;
+  let actualMortgageAuto = 0;
   if (useItemized && mortgageInterest > 0) {
-    actualMortgage = Math.min(Math.max(0, mortgageInterest - savings), params.mortgageLimit);
+    actualMortgageAuto = Math.min(Math.max(0, mortgageInterest - savings), params.mortgageLimit);
   }
+  const actualMortgage = useItemized ? applyOverride("mortgageInterest", actualMortgageAuto) : 0;
   // 重算列舉合計 (扣除儲蓄投資後的房貸利息)
   const itemizedTotalActual = useItemized ?
-    (donationGeneralCapped + donationUnlimited + insurancePersonalCapped + insuranceHealth + medical + disaster + actualMortgage)
+    (donationGeneralCapped + donationUnlimitedCapped + insurancePersonalCapped + insuranceHealthCapped + medicalCapped + disasterCapped + actualMortgage)
     : 0;
   const generalDeductionActual = useItemized ? itemizedTotalActual : standardDeduction;
 
@@ -1356,10 +1382,22 @@ function computeTaxForFiling(filing, members, year) {
     generalDeduction: generalDeductionActual,
     itemizedDetail: {
       donationGeneral: donationGeneralCapped,
-      donationUnlimited,
+      donationUnlimited: donationUnlimitedCapped,
       insurancePersonal: insurancePersonalCapped,
-      insuranceHealth, medical, disaster,
+      insuranceHealth: insuranceHealthCapped,
+      medical: medicalCapped,
+      disaster: disasterCapped,
       mortgageInterest: actualMortgage,
+    },
+    // 系統自動算的可扣除值 (套上限後,沒被 override),給 UI 雙欄對比用
+    itemizedAuto: {
+      donationGeneral: donationGeneralCappedAuto,
+      donationUnlimited: donationUnlimited,
+      insurancePersonal: insurancePersonalCappedAuto,
+      insuranceHealth: insuranceHealth,
+      medical: medical,
+      disaster: disaster,
+      mortgageInterest: actualMortgageAuto,
     },
     // 特扣
     salarySD, savings, savingsAuto, disabilityDed, educationDed, preschoolDed, longTermCareDed, rentDeductActual,
@@ -4751,99 +4789,215 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
           </div>
         </div>
         <div className="p-5">
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <DeductionInput
-              label="一般捐贈" hint={`上限 = 綜合所得 (扣薪資特扣後) 20% = ${fmt((result.grossIncomeForDonation || result.grossIncome) * 0.2)}`}
-              value={filing.itemizedDeductions.donationGeneral}
-              onChange={v => updateField("itemizedDeductions.donationGeneral", v)} />
-            <DeductionInput
-              label="不限額捐贈" hint="政府/國防/勞軍/古蹟修復等,不限額"
-              value={filing.itemizedDeductions.donationUnlimited}
-              onChange={v => updateField("itemizedDeductions.donationUnlimited", v)} />
-            <div>
-              <DeductionInput
-                label="人身保險費"
-                hint={`每人 ≤ 24,000,實際 < 24,000 只能扣實際;申報戶上限 ${fmt(params.insuranceLimit * result.filers.length)}`}
-                value={filing.itemizedDeductions.insurancePersonal}
-                onChange={v => updateField("itemizedDeductions.insurancePersonal", v)} />
-              {/* 逐人輸入 (展開) */}
-              <details className="mt-1">
-                <summary className="text-[10px] cursor-pointer" style={{ color: "var(--green)" }}>
-                  ▸ 逐人輸入 (更精確,每人 &lt; 24k 只扣實際)
-                </summary>
-                <div className="mt-2 p-2 rounded space-y-1.5" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
-                  {result.filers.map(m => {
-                    const v = filing.itemizedDeductions.insurancePersonalByMember?.[m.id] || "";
-                    const num = toNum(v);
-                    const capped = Math.min(num, params.insuranceLimit);
-                    return (
-                      <div key={m.id} className="flex items-center gap-2">
-                        <span className="text-[10px]" style={{ minWidth: "55px" }}>{m.name}</span>
-                        <input type="number" className="input-text-plain text-[10px] w-20 text-right"
-                          value={v}
+          {/* 申報書式表格:項目 / 實際發生 / 系統算可扣除 / 手動覆寫 */}
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
+                <th className="px-3 py-2 text-left text-xs font-medium" style={{ color: "var(--ink-mute)" }}>項目</th>
+                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>實際發生金額</th>
+                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>系統算可扣除</th>
+                <th className="px-3 py-2 text-right text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px", background: "#fef9ec" }}>手動覆寫</th>
+                <th className="px-3 py-2 text-left text-xs font-medium" style={{ color: "var(--ink-mute)" }}>備註</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                const rows = [
+                  {
+                    key: "donationGeneral", label: "對機關或團體之捐贈 (現金, ≤20%綜所)",
+                    actual: toNum(filing.itemizedDeductions.donationGeneral),
+                    auto: result.itemizedAuto?.donationGeneral || 0,
+                    actualField: "donationGeneral",
+                    note: () => {
+                      const cap = Math.round((result.grossIncomeForDonation || result.grossIncome) * 0.2);
+                      const actual = toNum(filing.itemizedDeductions.donationGeneral);
+                      if (actual > cap) return <span style={{ color: "var(--gold)" }}>已套 20% 上限 {fmt(cap)}</span>;
+                      return `上限 ${fmt(cap)}`;
+                    },
+                  },
+                  {
+                    key: "donationUnlimited", label: "對政府之捐贈 / 不限額捐贈",
+                    actual: toNum(filing.itemizedDeductions.donationUnlimited),
+                    auto: result.itemizedAuto?.donationUnlimited || 0,
+                    actualField: "donationUnlimited",
+                    note: () => "政府/國防/勞軍/古蹟修復,不限額",
+                  },
+                  {
+                    key: "insurancePersonal", label: "人身保險費 (非健保)",
+                    actual: toNum(filing.itemizedDeductions.insurancePersonal),
+                    auto: result.itemizedAuto?.insurancePersonal || 0,
+                    actualField: "insurancePersonal",
+                    note: () => {
+                      const hasPerMember = Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0;
+                      if (hasPerMember) return <span style={{ color: "var(--green)" }}>✓ 逐人輸入</span>;
+                      return `每人 ≤ 24k;申報戶上限 ${fmt(params.insuranceLimit * result.filers.length)}`;
+                    },
+                  },
+                  {
+                    key: "insuranceHealth", label: "人身保險費 - 健保 (含補充保費)",
+                    actual: toNum(filing.itemizedDeductions.insuranceHealth),
+                    auto: result.itemizedAuto?.insuranceHealth || 0,
+                    actualField: "insuranceHealth",
+                    note: () => "不限額",
+                  },
+                  {
+                    key: "medical", label: "醫藥及生育費",
+                    actual: toNum(filing.itemizedDeductions.medical),
+                    auto: result.itemizedAuto?.medical || 0,
+                    actualField: "medical",
+                    note: () => {
+                      const actual = toNum(filing.itemizedDeductions.medical);
+                      if (actual > 300000) return <span style={{ color: "var(--gold)" }}>⚠ 偏大,請核對</span>;
+                      return "不限額,須附收據";
+                    },
+                  },
+                  {
+                    key: "disaster", label: "災害損失",
+                    actual: toNum(filing.itemizedDeductions.disaster),
+                    auto: result.itemizedAuto?.disaster || 0,
+                    actualField: "disaster",
+                    note: () => "30 日內報國稅局",
+                  },
+                  {
+                    key: "mortgageInterest", label: "自用住宅購屋借款利息",
+                    actual: toNum(filing.itemizedDeductions.mortgageInterest),
+                    auto: result.itemizedAuto?.mortgageInterest || 0,
+                    actualField: "mortgageInterest",
+                    note: () => {
+                      const input = toNum(filing.itemizedDeductions.mortgageInterest);
+                      if (input === 0) return `一屋,實際 − 儲蓄扣除,上限 ${fmt(params.mortgageLimit)}`;
+                      if (input - result.savings > params.mortgageLimit) return <span style={{ color: "var(--gold)" }}>已套 30 萬上限</span>;
+                      return `實際 ${fmt(input)} − 儲蓄 ${fmt(result.savings)}`;
+                    },
+                  },
+                ];
+
+                return rows.map(r => {
+                  const overrideVal = filing.itemizedDeductions.overrides?.[r.key];
+                  const hasOverride = overrideVal !== undefined && overrideVal !== null && overrideVal !== "";
+                  const finalVal = hasOverride ? toNum(overrideVal) : r.auto;
+                  return (
+                    <tr key={r.key} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                      <td className="px-3 py-2 text-xs">{r.label}</td>
+                      <td className="px-2 py-1 text-right">
+                        <input type="number"
+                          className="input-text-plain text-sm w-full text-right num"
                           placeholder="0"
+                          value={r.actual || ""}
+                          onChange={e => updateField(`itemizedDeductions.${r.actualField}`, Number(e.target.value) || 0)} />
+                      </td>
+                      <td className="px-3 py-2 text-right num text-sm" style={{ color: hasOverride ? "var(--ink-mute)" : "var(--accent-deep)", textDecoration: hasOverride ? "line-through" : "none" }}>
+                        {fmt(r.auto)}
+                      </td>
+                      <td className="px-2 py-1 text-right" style={{ background: "#fef9ec" }}>
+                        <input type="number"
+                          className="input-text-plain text-sm w-full text-right num"
+                          placeholder="留空 = 用系統"
+                          value={hasOverride ? overrideVal : ""}
                           onChange={e => {
-                            const newMap = { ...(filing.itemizedDeductions.insurancePersonalByMember || {}) };
-                            const val = Number(e.target.value);
-                            if (val > 0) newMap[m.id] = val;
-                            else delete newMap[m.id];
-                            updateField("itemizedDeductions.insurancePersonalByMember", newMap);
+                            const newOverrides = { ...(filing.itemizedDeductions.overrides || {}) };
+                            const v = e.target.value;
+                            if (v === "" || v === null) {
+                              delete newOverrides[r.key];
+                            } else {
+                              newOverrides[r.key] = Number(v) || 0;
+                            }
+                            updateField("itemizedDeductions.overrides", newOverrides);
                           }} />
-                        <span className="text-[9px] num" style={{ color: num > params.insuranceLimit ? "var(--gold)" : "var(--ink-mute)" }}>
-                          {num > 0 ? `→ 扣 ${fmt(capped)}${num > params.insuranceLimit ? " (上限)" : ""}` : ""}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  <div className="text-[10px] pt-1 border-t" style={{ borderColor: "var(--line)", color: "var(--green)" }}>
-                    ✓ 逐人輸入合計: {fmt(
-                      Object.entries(filing.itemizedDeductions.insurancePersonalByMember || {})
-                        .reduce((s, [, v]) => s + Math.min(toNum(v), params.insuranceLimit), 0)
-                    )}
-                    {Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0 &&
-                      <span className="ml-2">(優先於上方總額)</span>
-                    }
-                  </div>
-                </div>
-              </details>
-            </div>
-            <DeductionInput
-              label="全民健保費" hint="不限額 (含補充保費)"
-              value={filing.itemizedDeductions.insuranceHealth}
-              onChange={v => updateField("itemizedDeductions.insuranceHealth", v)} />
-            <DeductionInput
-              label="醫藥及生育費" hint="不限額,須附醫療院所收據"
-              value={filing.itemizedDeductions.medical}
-              onChange={v => updateField("itemizedDeductions.medical", v)} />
-            <DeductionInput
-              label="災害損失" hint="不可抗力災害,需 30 日內報國稅局"
-              value={filing.itemizedDeductions.disaster}
-              onChange={v => updateField("itemizedDeductions.disaster", v)} />
-            <DeductionInput
-              label="自用住宅購屋借款利息"
-              hint={(() => {
-                const input = toNum(filing.itemizedDeductions.mortgageInterest);
-                if (input === 0) return `一屋為限,實際扣除 = 利息 − 儲蓄投資扣除額 (上限 ${fmt(params.mortgageLimit)})`;
-                const afterSavings = Math.max(0, input - result.savings);
-                const capped = Math.min(afterSavings, params.mortgageLimit);
-                if (capped === input) {
-                  return `✓ 全額列入 ${fmt(capped)} (儲蓄扣除額 0)`;
-                }
-                if (capped === 0) {
-                  return `⚠ 儲蓄扣除 ${fmt(result.savings)} 已大於利息,實際列入 0`;
-                }
-                if (afterSavings > params.mortgageLimit) {
-                  return `輸入 ${fmt(input)} − 儲蓄 ${fmt(result.savings)} = ${fmt(afterSavings)},超上限 → 列入 ${fmt(params.mortgageLimit)}`;
-                }
-                return `輸入 ${fmt(input)} − 儲蓄扣除 ${fmt(result.savings)} = 實際列入 ${fmt(capped)}`;
+                      </td>
+                      <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                        {typeof r.note === "function" ? r.note() : r.note}
+                      </td>
+                    </tr>
+                  );
+                });
               })()}
-              value={filing.itemizedDeductions.mortgageInterest}
-              onChange={v => updateField("itemizedDeductions.mortgageInterest", v)} />
-            <DeductionInput
-              label="自住房屋租金支出"
-              hint={`特扣 (114起改特扣,上限 ${fmt(params.rentDeduction)}),稅率20%以上不得扣`}
-              value={filing.rentSupportPaid}
-              onChange={v => onChange({ ...filing, rentSupportPaid: v })} />
+
+              {/* 合計列 */}
+              <tr style={{ background: "#f0ede2", borderTop: "2px solid var(--ink)" }}>
+                <td className="px-3 py-2 font-medium text-sm">可扣除金額合計</td>
+                <td className="px-3 py-2 text-right num text-xs" style={{ color: "var(--ink-mute)" }}>
+                  {/* 實際發生合計 */}
+                  {fmt(
+                    toNum(filing.itemizedDeductions.donationGeneral) +
+                    toNum(filing.itemizedDeductions.donationUnlimited) +
+                    toNum(filing.itemizedDeductions.insurancePersonal) +
+                    toNum(filing.itemizedDeductions.insuranceHealth) +
+                    toNum(filing.itemizedDeductions.medical) +
+                    toNum(filing.itemizedDeductions.disaster) +
+                    toNum(filing.itemizedDeductions.mortgageInterest)
+                  )}
+                </td>
+                <td colSpan={2} className="px-3 py-2 text-right num font-medium" style={{ fontSize: "16px", color: "var(--accent-deep)" }}>
+                  {fmt(result.itemizedTotal)}
+                </td>
+                <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                  最終採用值
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* 自住房屋租金支出 (114 起改特扣,單獨欄位) */}
+          <div className="mt-4 p-3 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+            <div className="flex items-center gap-3">
+              <span className="text-xs" style={{ minWidth: "150px", color: "var(--ink-soft)" }}>自住房屋租金支出</span>
+              <input type="number"
+                className="input-text w-32 text-right text-sm"
+                placeholder="0"
+                value={filing.rentSupportPaid || ""}
+                onChange={e => onChange({ ...filing, rentSupportPaid: Number(e.target.value) || 0 })} />
+              <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>
+                特扣 (114 起改特扣,上限 {fmt(params.rentDeduction)}),稅率 20% 以上不得扣
+              </span>
+            </div>
+          </div>
+
+          {/* 人身保險逐人輸入 (展開) — 從上方表格獨立出來放下面 */}
+          <div className="mt-4">
+            <details>
+              <summary className="text-xs cursor-pointer p-2 rounded" style={{ background: "#f5fbef", color: "var(--green)" }}>
+                ▸ 人身保險費 · 逐人輸入 (更精確,每人 &lt; 24k 只扣實際)
+              </summary>
+              <div className="mt-2 p-3 rounded space-y-1.5" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                <div className="text-[10px] mb-2" style={{ color: "var(--ink-mute)" }}>
+                  法規:每一被保險人 24,000 元;實際 &lt; 24,000 只能扣實際,不可互相分配。
+                  填了下方後,優先於上方「人身保險費」總額欄。
+                </div>
+                {result.filers.map(m => {
+                  const v = filing.itemizedDeductions.insurancePersonalByMember?.[m.id] || "";
+                  const num = toNum(v);
+                  const capped = Math.min(num, params.insuranceLimit);
+                  return (
+                    <div key={m.id} className="flex items-center gap-2">
+                      <span className="text-xs" style={{ minWidth: "70px" }}>{m.name}</span>
+                      <input type="number" className="input-text-plain text-xs w-24 text-right"
+                        value={v}
+                        placeholder="0"
+                        onChange={e => {
+                          const newMap = { ...(filing.itemizedDeductions.insurancePersonalByMember || {}) };
+                          const val = Number(e.target.value);
+                          if (val > 0) newMap[m.id] = val;
+                          else delete newMap[m.id];
+                          updateField("itemizedDeductions.insurancePersonalByMember", newMap);
+                        }} />
+                      <span className="text-[10px] num" style={{ color: num > params.insuranceLimit ? "var(--gold)" : "var(--ink-mute)" }}>
+                        {num > 0 ? `→ 扣 ${fmt(capped)}${num > params.insuranceLimit ? " (上限 24k)" : ""}` : ""}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div className="text-xs pt-2 border-t mt-2" style={{ borderColor: "var(--line)", color: "var(--green)" }}>
+                  ✓ 逐人輸入合計: <b className="num">{fmt(
+                    Object.entries(filing.itemizedDeductions.insurancePersonalByMember || {})
+                      .reduce((s, [, v]) => s + Math.min(toNum(v), params.insuranceLimit), 0)
+                  )}</b>
+                  {Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0 &&
+                    <span className="ml-2 text-[10px]">(優先於上方總額)</span>
+                  }
+                </div>
+              </div>
+            </details>
           </div>
 
           {/* 標準 vs 列舉即時對比 */}
@@ -4869,48 +5023,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   ? `比標準多 ${fmt(result.itemizedTotal - result.standardDeduction)}`
                   : `比標準少 ${fmt(result.standardDeduction - result.itemizedTotal)}`}
               </div>
-              {/* 列舉明細展開 */}
-              <details className="mt-2">
-                <summary className="text-xs cursor-pointer" style={{ color: "var(--accent-deep)" }}>
-                  <span className="chevron inline-block mr-1">▸</span>展開列舉明細
-                </summary>
-                <div className="mt-2 space-y-0.5 text-xs">
-                  {result.itemizedDetail.donationGeneral > 0 && (
-                    <div className="flex justify-between"><span>一般捐贈 (≤20%)</span><span className="num">{fmt(result.itemizedDetail.donationGeneral)}</span></div>
-                  )}
-                  {result.itemizedDetail.donationUnlimited > 0 && (
-                    <div className="flex justify-between"><span>不限額捐贈</span><span className="num">{fmt(result.itemizedDetail.donationUnlimited)}</span></div>
-                  )}
-                  {result.itemizedDetail.insurancePersonal > 0 && (
-                    <div className="flex justify-between"><span>人身保險 (≤24k×人)</span><span className="num">{fmt(result.itemizedDetail.insurancePersonal)}</span></div>
-                  )}
-                  {result.itemizedDetail.insuranceHealth > 0 && (
-                    <div className="flex justify-between"><span>健保費</span><span className="num">{fmt(result.itemizedDetail.insuranceHealth)}</span></div>
-                  )}
-                  {result.itemizedDetail.medical > 0 && (
-                    <div className="flex justify-between"><span>醫藥及生育</span><span className="num">{fmt(result.itemizedDetail.medical)}</span></div>
-                  )}
-                  {result.itemizedDetail.disaster > 0 && (
-                    <div className="flex justify-between"><span>災害損失</span><span className="num">{fmt(result.itemizedDetail.disaster)}</span></div>
-                  )}
-                  {(() => {
-                    const rawMortgage = toNum(filing.itemizedDeductions.mortgageInterest);
-                    const actual = result.itemizedDetail.mortgageInterest;
-                    if (rawMortgage === 0) return null;
-                    return (
-                      <div className="flex justify-between" style={{ color: actual < rawMortgage ? "var(--gold)" : "inherit" }}>
-                        <span>房貸利息 {actual < rawMortgage ? `(${fmt(rawMortgage)}−儲蓄${fmt(result.savings)})` : ""}</span>
-                        <span className="num">{fmt(actual)}</span>
-                      </div>
-                    );
-                  })()}
-                  <div className="flex justify-between border-t pt-1 mt-1 font-medium" style={{ borderColor: "var(--green)" }}>
-                    <span>合計</span><span className="num">{fmt(result.itemizedTotal)}</span>
-                  </div>
-                </div>
-              </details>
             </div>
           </div>
+        </div>
+      </div>
 
           {/* 捐贈試算器 */}
           <DonationSimulator
@@ -4919,8 +5035,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             params={params}
             onApplyDonation={delta => updateField("itemizedDeductions.donationGeneral",
               toNum(filing.itemizedDeductions.donationGeneral) + delta)} />
-        </div>
-      </div>
 
       {/* ③ 抵減與已扣繳 */}
       <div className="card">
