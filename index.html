@@ -6219,22 +6219,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   const overrideVal = filing.itemizedDeductions.overrides?.[r.key];
                   const hasOverride = overrideVal !== undefined && overrideVal !== null && overrideVal !== "";
                   const finalVal = hasOverride ? toNum(overrideVal) : r.auto;
-                  const actualExpr = filing.itemizedDeductions[`${r.actualField}Expr`];
                   return (
                     <tr key={r.key} style={{ borderBottom: "1px solid var(--line-soft)" }}>
                       <td className="px-3 py-2 text-xs">{r.label}</td>
                       <td className="px-2 py-1 text-right">
-                        <FormulaInput
-                          exprValue={actualExpr}
+                        <SumInput
                           value={r.actual}
-                          onChange={({ expr, value }) => {
-                            const newItemized = {
-                              ...filing.itemizedDeductions,
-                              [r.actualField]: value,
-                              [`${r.actualField}Expr`]: expr,
-                            };
-                            onChange({ ...filing, itemizedDeductions: newItemized });
-                          }}
+                          onChange={v => updateField(`itemizedDeductions.${r.actualField}`, v)}
                           placeholder="0"
                         />
                       </td>
