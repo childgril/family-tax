@@ -7050,6 +7050,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         filing={filing} onChange={onChange} rawOnChange={rawOnChange}
         systemFinalDue={result.finalDue}
         properties={householdProperties} members={members}
+        contracts={contracts}
         createSupplementEntry={(adj) => {
           // 補繳·新增所得 → 在 ① 建一筆 entry,自動跳到 ①
           // 補繳·新增租金 → 自動勾選相關物件 + 跳到 ② (使用者再去調申報應稅)
@@ -7471,7 +7472,7 @@ function OfficialAuditPanel({ filing, entries, onChange }) {
   );
 }
 
-function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, properties, members, createSupplementEntry }) {
+function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, properties, members, contracts, createSupplementEntry }) {
   const settlement = filing.actualSettlement || {};
   const adjustments = filing.adjustments || [];
   const ADJ_TYPES = {
@@ -7707,30 +7708,124 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                         onClick={() => removeAdjustment(a.id)}>×</button>
                     </div>
 
-                    {/* === 新增所得 / 新增租金 的跳轉提示 === */}
-                    {showIncomeBlock && (
+                    {/* === 新增所得 / 新增租金 區 === */}
+                    {showIncomeBlock && a.type !== "supplement_rental" && (
                       <div className="p-2 rounded mb-2 flex items-center gap-3" style={{ background: "white", border: "1px dashed var(--gold)" }}>
                         <div className="text-[10px] flex-1" style={{ color: "var(--ink-soft)" }}>
-                          {a.type === "supplement_rental"
-                            ? "📋 點右側按鈕跳到 ② 租賃紀錄輸入,去調整該物件的「申報應稅」金額"
-                            : "📋 點右側按鈕,自動到 ① 建一筆「其他所得 50」entry,你只要填金額"}
+                          📋 點右側按鈕,自動到 ① 建一筆「其他所得 50」entry,你只要填金額
                           <span className="ml-2" style={{ color: "var(--gold)" }}>
-                            {a.type === "supplement_rental"
-                              ? "明年同物件會延續這筆補列(從去年帶出)"
-                              : "會帶「來自 " + filing.year + " 年補繳通知」標記,明年自動再帶過去"}
+                            會帶「來自 {filing.year} 年補繳通知」標記,明年自動再帶過去
                           </span>
                         </div>
                         <button
                           className="btn-primary text-[10px] px-2 py-1"
                           onClick={() => {
-                            if (typeof createSupplementEntry === "function") {
-                              createSupplementEntry(a);
-                            }
+                            if (typeof createSupplementEntry === "function") createSupplementEntry(a);
                           }}
-                          title={a.type === "supplement_rental" ? "跳到 ② 租賃紀錄輸入" : "自動建一筆 entry,預帶補繳年份標記"}
+                          title="自動建一筆 entry,預帶補繳年份標記"
                         >
-                          {a.type === "supplement_rental" ? "→ 跳到 ② 補列租金" : "+ 建立補繳 entry"}
+                          + 建立補繳 entry
                         </button>
+                      </div>
+                    )}
+
+                    {/* === 補繳·新增租金 — 直接寫到對照表覆寫值 === */}
+                    {a.type === "supplement_rental" && (
+                      <div className="p-3 rounded mb-2" style={{ background: "white", border: "1px dashed var(--gold)" }}>
+                        <div className="text-[10px] mb-2" style={{ color: "var(--gold)" }}>
+                          📋 補列租金 — 選物件 + 填應稅金額,點「套用」直接寫到 ② 對照表的「申報應稅」覆寫
+                        </div>
+                        <div className="grid grid-cols-12 gap-2 items-center">
+                          <div className="col-span-5 flex items-center gap-1">
+                            <span className="text-[10px]" style={{ color: "var(--ink-mute)", minWidth: "40px" }}>物件:</span>
+                            <select
+                              className="input-text-plain text-xs flex-1"
+                              value={a.adjPropertyId || ""}
+                              onChange={e => updateAdjustment(a.id, { adjPropertyId: e.target.value })}>
+                              <option value="">— 請選 —</option>
+                              {(properties || []).map(prop => {
+                                const own = (members || []).find(m => m.id === prop.ownerId);
+                                return (
+                                  <option key={prop.id} value={prop.id}>
+                                    {prop.address || prop.name} ({own?.name || "?"})
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                          <div className="col-span-3 flex items-center gap-1">
+                            <span className="text-[10px]" style={{ color: "var(--ink-mute)", minWidth: "55px" }}>類型:</span>
+                            <select
+                              className="input-text-plain text-xs flex-1"
+                              value={a.adjRentalType || "general"}
+                              onChange={e => updateAdjustment(a.id, { adjRentalType: e.target.value })}>
+                              <option value="general">一般 (43%)</option>
+                              <option value="public">公益</option>
+                            </select>
+                          </div>
+                          <div className="col-span-4 flex items-center gap-1">
+                            <span className="text-[10px]" style={{ color: "var(--ink-mute)", minWidth: "55px" }}>應稅金額:</span>
+                            <input type="number" className="input-text-plain text-xs flex-1 num text-right"
+                              placeholder="0"
+                              value={a.adjTaxableAmount || ""}
+                              onChange={e => updateAdjustment(a.id, { adjTaxableAmount: Number(e.target.value) || 0 })} />
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="text-[10px] flex-1" style={{ color: "var(--ink-soft)" }}>
+                            {a.adjPropertyId && a.adjTaxableAmount
+                              ? `將寫入:${(properties || []).find(pp => pp.id === a.adjPropertyId)?.address || "?"} → 申報應稅 ${fmt(a.adjTaxableAmount)} (${a.adjRentalType === "public" ? "公益" : "一般"})`
+                              : <span style={{ color: "var(--gold)" }}>請選物件 + 填應稅金額</span>}
+                          </div>
+                          <button
+                            className="btn-primary text-[10px] px-3 py-1"
+                            disabled={!a.adjPropertyId || !a.adjTaxableAmount || filing.settlementLocked}
+                            onClick={() => {
+                              if (filing.settlementLocked) {
+                                alert("⑦ 區已鎖定,無法套用。請先解鎖。");
+                                return;
+                              }
+                              const propId = a.adjPropertyId;
+                              const taxableVal = toNum(a.adjTaxableAmount);
+                              const yr = filing.year;
+                              if (!propId || !taxableVal) return;
+                              const prop = (properties || []).find(pp => pp.id === propId);
+                              if (!prop) return;
+
+                              // 1. 自動勾選計入此物件 (manualRentOverrides[propId_year].includeInFiling = true)
+                              const newOverrides = { ...(filing.manualRentOverrides || {}) };
+                              const key = `${propId}_${yr}`;
+                              const cur = newOverrides[key] || {};
+                              newOverrides[key] = { ...cur, includeInFiling: true };
+
+                              // 2. 寫入 declaredTaxableOverrides
+                              //   若該物件該年度有合約 → 寫到第一份合約的 c_ key
+                              //   若沒合約 → 寫到 n_ key
+                              const newDtOv = { ...(filing.declaredTaxableOverrides || {}) };
+                              const aggCheck = aggregateContractsForYear(contracts || [], propId, yr, newOverrides);
+                              const matchedContract = aggCheck.contracts.find(c => c.months > 0 && (a.adjRentalType === "public" ? c.isPublic : !c.isPublic));
+                              if (matchedContract) {
+                                const auditKey = `c_${matchedContract.contractId}_${yr}`;
+                                newDtOv[auditKey] = taxableVal;
+                              } else {
+                                // 沒對應合約 → n_ key
+                                const nKey = `n_${propId}_${yr}`;
+                                newDtOv[nKey] = taxableVal;
+                              }
+
+                              // 用 rawOnChange 繞過鎖定攔截 (因為這是 ⑦ 區補繳,允許動 filing 本體)
+                              (rawOnChange || onChange)({
+                                ...filing,
+                                manualRentOverrides: newOverrides,
+                                declaredTaxableOverrides: newDtOv,
+                              });
+                              alert(`已套用!${prop.address || prop.name} 的申報應稅 ${fmt(taxableVal)} 已寫入對照表。`);
+                            }}
+                            title="自動勾選計入此物件 + 寫入應稅金額到對照表"
+                          >
+                            ✓ 套用到對照表
+                          </button>
+                        </div>
                       </div>
                     )}
 
