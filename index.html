@@ -3438,7 +3438,11 @@ function PropertiesPage({ data, setData, year }) {
                     }
                   }
                 }
-                const hasActualDeclared = isIncludedInFiling && (actualGeneralRent > 0 || actualPublicRent > 0 || actualGeneralTaxable > 0 || actualPublicTaxable > 0);
+                // 判斷此物件「在這年度實際參與了申報」(有合約 / 沒合約但有手動覆寫)
+                // 跟 isIncludedInFiling 不同:勾了計入但該年度沒合約也沒覆寫 → 不上色
+                const hasGeneralData = isIncludedInFiling && (yearGenerals.length > 0 || actualGeneralTaxable > 0);
+                const hasPublicData = isIncludedInFiling && (yearPublics.length > 0 || actualPublicTaxable > 0);
+                const hasAnyData = hasGeneralData || hasPublicData;
 
                 return (
                   <React.Fragment key={p.id}>
@@ -3475,8 +3479,8 @@ function PropertiesPage({ data, setData, year }) {
                       <td className="px-3 py-3 align-top">
                         <YearContractsCell contracts={yearGenerals} chipClass="chip-amber" />
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: isIncludedInFiling ? "#fef9ec" : "transparent" }}>
-                        {isIncludedInFiling ? (
+                      <td className="px-3 py-3 align-top text-right" style={{ background: hasGeneralData ? "#fef9ec" : "transparent" }}>
+                        {hasGeneralData ? (
                           <>
                             <div className="num font-medium" style={{ color: "var(--accent-deep)", fontSize: "16px" }}>
                               {fmt(actualGeneralRent)}
@@ -3485,6 +3489,8 @@ function PropertiesPage({ data, setData, year }) {
                               應稅 {fmt(actualGeneralTaxable)}
                             </div>
                           </>
+                        ) : isIncludedInFiling ? (
+                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
                         ) : (
                           <span className="text-xs" style={{ color: "var(--ink-mute)" }}>
                             未勾選計入
@@ -3494,8 +3500,8 @@ function PropertiesPage({ data, setData, year }) {
                       <td className="px-3 py-3 align-top">
                         <YearContractsCell contracts={yearPublics} chipClass="chip-green" isPublic />
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: isIncludedInFiling ? "#f5fbef" : "transparent" }}>
-                        {isIncludedInFiling ? (
+                      <td className="px-3 py-3 align-top text-right" style={{ background: hasPublicData ? "#f5fbef" : "transparent" }}>
+                        {hasPublicData ? (
                           <>
                             <div className="num font-medium" style={{ color: "var(--green)", fontSize: "16px" }}>
                               {fmt(actualPublicRent)}
@@ -3508,8 +3514,8 @@ function PropertiesPage({ data, setData, year }) {
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: isIncludedInFiling ? "#fef5e8" : "transparent" }}>
-                        {isIncludedInFiling ? (
+                      <td className="px-3 py-3 align-top text-right" style={{ background: hasAnyData ? "#fef5e8" : "transparent" }}>
+                        {hasAnyData ? (
                           <>
                             <div className="num font-bold" style={{ color: "var(--accent-deep)", fontSize: "18px" }}>
                               {fmt(actualGeneralRent + actualPublicRent)}
