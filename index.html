@@ -9908,6 +9908,216 @@ function HistoryPage({ data }) {
 function DataPage({ data, setData }) {
   const fileRef = useRef(null);
 
+  // === File System Access API (FSA) 雲端同步 ===
+  // 讓使用者選擇一個「同步資料夾」(本地檔案系統),系統會自動讀寫 tax.json
+  // 適合搭配 Synology Drive / Dropbox / OneDrive Client 用 — 本地檔變動 → 自動同步到雲
+  const fsaSupported = typeof window !== "undefined" && "showDirectoryPicker" in window;
+  const [fsaHandle, setFsaHandle] = React.useState(null);  // 資料夾 handle
+  const [fsaStatus, setFsaStatus] = React.useState({ connected: false, lastSync: null, msg: "" });
+  const [lockInfo, setLockInfo] = React.useState(null);  // {user, time}
+  const [fsaUserName, setFsaUserName] = React.useState(() => localStorage.getItem("fsa_user_name") || "");
+  const [autoSyncEnabled, setAutoSyncEnabled] = React.useState(() => localStorage.getItem("fsa_auto_sync") === "1");
+
+  // 儲存 handle 到 indexedDB (handle 不能存 localStorage)
+  const HANDLE_DB = "tax_app_handles";
+  const HANDLE_KEY = "sync_dir";
+
+  React.useEffect(() => {
+    // 啟動時嘗試恢復先前的 handle
+    if (!fsaSupported) return;
+    const tryRestore = async () => {
+      try {
+        const db = await openHandleDB();
+        const handle = await getHandle(db, HANDLE_KEY);
+        if (handle) {
+          // 詢問權限 (瀏覽器可能會要求重新授權)
+          const perm = await handle.queryPermission({ mode: "readwrite" });
+          if (perm === "granted") {
+            setFsaHandle(handle);
+            setFsaStatus({ connected: true, lastSync: null, msg: `已連結資料夾:${handle.name}` });
+          } else {
+            // 需要使用者手動點「連結資料夾」重新授權
+            setFsaStatus({ connected: false, lastSync: null, msg: "上次連結的資料夾需要重新授權,請點下方按鈕" });
+          }
+        }
+      } catch (e) {
+        console.warn("FSA restore failed", e);
+      }
+    };
+    tryRestore();
+  }, []);
+
+  // IndexedDB helpers
+  const openHandleDB = () => new Promise((resolve, reject) => {
+    const req = indexedDB.open(HANDLE_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("handles");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const saveHandle = (db, key, handle) => new Promise((resolve, reject) => {
+    const tx = db.transaction("handles", "readwrite");
+    tx.objectStore("handles").put(handle, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  const getHandle = (db, key) => new Promise((resolve, reject) => {
+    const tx = db.transaction("handles", "readonly");
+    const req = tx.objectStore("handles").get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+
+  // 選資料夾
+  const pickFolder = async () => {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+      const perm = await handle.requestPermission({ mode: "readwrite" });
+      if (perm !== "granted") {
+        alert("⚠ 沒有取得讀寫權限,無法同步");
+        return;
+      }
+      const db = await openHandleDB();
+      await saveHandle(db, HANDLE_KEY, handle);
+      setFsaHandle(handle);
+      setFsaStatus({ connected: true, lastSync: null, msg: `已連結資料夾:${handle.name}` });
+      // 嘗試讀現有 tax.json
+      await syncFromFolder(handle, true);
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        alert("選擇資料夾失敗: " + e.message);
+      }
+    }
+  };
+
+  // 從資料夾讀 tax.json + lock.json
+  const syncFromFolder = async (handle, askOverwrite = false) => {
+    try {
+      // 讀 lock.json
+      let lock = null;
+      try {
+        const lockHandle = await handle.getFileHandle("lock.json", { create: false });
+        const file = await lockHandle.getFile();
+        const text = await file.text();
+        lock = JSON.parse(text);
+        // 5 分鐘無動作視為過期
+        const lockAge = Date.now() - new Date(lock.time).getTime();
+        if (lockAge > 5 * 60 * 1000) lock = null;
+      } catch (e) { /* 沒 lock.json 也 ok */ }
+      setLockInfo(lock);
+
+      // 讀 tax.json
+      try {
+        const fileHandle = await handle.getFileHandle("tax.json", { create: false });
+        const file = await fileHandle.getFile();
+        const text = await file.text();
+        const remote = JSON.parse(text);
+        if (askOverwrite) {
+          const localHasData = data.members.length > 0 || data.filings.length > 0;
+          if (localHasData) {
+            const yes = window.confirm(
+              `資料夾中有 tax.json:\n` +
+              `  成員 ${remote.members?.length || 0} · 申報戶 ${remote.filings?.length || 0} · 物件 ${remote.properties?.length || 0}\n\n` +
+              `本機目前:\n` +
+              `  成員 ${data.members.length} · 申報戶 ${data.filings.length} · 物件 ${data.properties.length}\n\n` +
+              `[確定] 載入雲端版,覆蓋本機\n[取消] 保留本機版,等下次寫入時上傳`
+            );
+            if (yes) {
+              setData(migrateData({ ...SAMPLE_DATA, ...remote }));
+              setFsaStatus({ connected: true, lastSync: new Date(), msg: `✓ 已從 ${handle.name} 載入` });
+            }
+          } else {
+            // 本機沒資料 → 直接載入雲端
+            setData(migrateData({ ...SAMPLE_DATA, ...remote }));
+            setFsaStatus({ connected: true, lastSync: new Date(), msg: `✓ 已從 ${handle.name} 載入` });
+          }
+        } else {
+          setData(migrateData({ ...SAMPLE_DATA, ...remote }));
+          setFsaStatus({ connected: true, lastSync: new Date(), msg: `✓ 已從 ${handle.name} 載入` });
+        }
+      } catch (e) {
+        // 沒 tax.json → 第一次,直接寫入本機資料
+        await writeToFolder(handle);
+      }
+    } catch (e) {
+      setFsaStatus({ connected: false, lastSync: null, msg: "讀取失敗: " + e.message });
+    }
+  };
+
+  // 寫入 tax.json 到資料夾
+  const writeToFolder = async (handle) => {
+    if (!handle) handle = fsaHandle;
+    if (!handle) return;
+    try {
+      const perm = await handle.queryPermission({ mode: "readwrite" });
+      if (perm !== "granted") {
+        const newPerm = await handle.requestPermission({ mode: "readwrite" });
+        if (newPerm !== "granted") {
+          setFsaStatus(prev => ({ ...prev, msg: "⚠ 權限失效,請重新連結資料夾" }));
+          return;
+        }
+      }
+      const fileHandle = await handle.getFileHandle("tax.json", { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(JSON.stringify(data, null, 2));
+      await writable.close();
+      setFsaStatus({ connected: true, lastSync: new Date(), msg: `✓ 已寫入 ${handle.name}/tax.json` });
+    } catch (e) {
+      setFsaStatus(prev => ({ ...prev, msg: "⚠ 寫入失敗: " + e.message }));
+    }
+  };
+
+  // 寫 lock.json (表示「我正在編輯」)
+  const writeLock = async () => {
+    if (!fsaHandle || !fsaUserName) return;
+    try {
+      const lockHandle = await fsaHandle.getFileHandle("lock.json", { create: true });
+      const writable = await lockHandle.createWritable();
+      await writable.write(JSON.stringify({ user: fsaUserName, time: new Date().toISOString() }));
+      await writable.close();
+    } catch (e) { /* 略 */ }
+  };
+
+  // 解開 lock.json
+  const releaseLock = async () => {
+    if (!fsaHandle) return;
+    try {
+      await fsaHandle.removeEntry("lock.json");
+    } catch (e) { /* 沒 lock 也 ok */ }
+  };
+
+  // 自動同步:資料變動時 debounce 2 秒寫入
+  const writeTimer = React.useRef(null);
+  React.useEffect(() => {
+    if (!autoSyncEnabled || !fsaHandle) return;
+    if (writeTimer.current) clearTimeout(writeTimer.current);
+    writeTimer.current = setTimeout(async () => {
+      await writeLock();
+      await writeToFolder();
+    }, 2000);
+    return () => writeTimer.current && clearTimeout(writeTimer.current);
+  }, [data, autoSyncEnabled, fsaHandle]);
+
+  // 持久化使用者名稱
+  React.useEffect(() => {
+    if (fsaUserName) localStorage.setItem("fsa_user_name", fsaUserName);
+  }, [fsaUserName]);
+  React.useEffect(() => {
+    localStorage.setItem("fsa_auto_sync", autoSyncEnabled ? "1" : "0");
+  }, [autoSyncEnabled]);
+
+  // 中斷連結
+  const disconnectFolder = async () => {
+    if (!window.confirm("確定中斷連結?之後改動不會自動同步,但本機資料仍保留。")) return;
+    try {
+      const db = await openHandleDB();
+      const tx = db.transaction("handles", "readwrite");
+      tx.objectStore("handles").delete(HANDLE_KEY);
+    } catch (e) { /* */ }
+    setFsaHandle(null);
+    setFsaStatus({ connected: false, lastSync: null, msg: "" });
+    setLockInfo(null);
+  };
+
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -9951,9 +10161,127 @@ function DataPage({ data, setData }) {
     <div className="fade-in">
       <PageHeader
         ornament="§ DATA MANAGEMENT · 資料管理"
-        title="備份、還原與匯出"
-        subtitle="所有資料儲存在你的瀏覽器本機,匯出 JSON 檔可備份或跨裝置使用"
+        title="備份、還原與多人共用"
+        subtitle="本機資料 + 可選擇與 Synology Drive / Dropbox / 雲端硬碟資料夾同步,支援多人協作"
       />
+
+      {/* === 多人共用區 (File System Access API) === */}
+      <div className="card p-5 mb-5" style={{ borderColor: fsaStatus.connected ? "var(--green)" : "var(--line)" }}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <div className="ornament" style={{ color: fsaStatus.connected ? "var(--green)" : "var(--ink-mute)" }}>
+              📁 FOLDER SYNC · 同步資料夾 (多人協作)
+            </div>
+            <h3 className="font-serif text-lg mt-1">
+              {fsaStatus.connected ? `已連結:${fsaHandle?.name || "(資料夾)"}` : "與本地同步資料夾連結"}
+            </h3>
+          </div>
+          {fsaStatus.connected && (
+            <span className="chip chip-green text-xs">已連線</span>
+          )}
+        </div>
+
+        {!fsaSupported && (
+          <div className="p-3 rounded text-sm" style={{ background: "#fff7ec", color: "var(--gold)" }}>
+            ⚠ 你的瀏覽器不支援 File System Access API (Safari、Firefox 等)。
+            請改用 <b>Chrome / Edge / Brave / Arc</b> 等基於 Chromium 的瀏覽器,或使用下方的「匯入 / 匯出 JSON」手動操作。
+          </div>
+        )}
+
+        {fsaSupported && !fsaStatus.connected && (
+          <div>
+            <p className="text-sm mb-3" style={{ color: "var(--ink-soft)" }}>
+              選擇一個本地資料夾,系統會自動讀寫 <code className="num">tax.json</code>。<br/>
+              搭配 <b>Synology Drive Client / Dropbox / OneDrive</b> 同步該資料夾,即可達成多人協作:
+            </p>
+            <ol className="text-xs space-y-1 mb-3 ml-4 list-decimal" style={{ color: "var(--ink-soft)" }}>
+              <li>公司 NAS 安裝 <b>Synology Drive Server</b>,建一個共用資料夾 <code className="num">tax-data</code></li>
+              <li>每個使用者電腦裝 <b>Synology Drive Client</b>,把 <code>tax-data</code> 同步到本地</li>
+              <li>每個使用者開啟此系統 → 按下方「連結資料夾」→ 選同步下來的本地資料夾</li>
+              <li>之後任何人改動 → 自動寫入本地 → Synology Drive 自動推到雲端 → 其他人下次開啟看到最新版</li>
+            </ol>
+            {fsaStatus.msg && (
+              <div className="text-xs mb-2 p-2 rounded" style={{ background: "#fff7ec", color: "var(--gold)" }}>
+                {fsaStatus.msg}
+              </div>
+            )}
+            <button className="btn-primary text-sm" onClick={pickFolder}>📁 連結同步資料夾</button>
+          </div>
+        )}
+
+        {fsaSupported && fsaStatus.connected && (
+          <div className="space-y-3">
+            {/* 連線狀態 */}
+            <div className="grid grid-cols-3 gap-3 text-xs">
+              <div className="p-2 rounded" style={{ background: "#f5fbef", border: "1px solid var(--green)" }}>
+                <div style={{ color: "var(--ink-mute)" }}>狀態</div>
+                <div className="font-medium" style={{ color: "var(--green)" }}>✓ 已連線</div>
+              </div>
+              <div className="p-2 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                <div style={{ color: "var(--ink-mute)" }}>上次同步</div>
+                <div className="num">{fsaStatus.lastSync ? fsaStatus.lastSync.toLocaleTimeString("zh-TW") : "—"}</div>
+              </div>
+              <div className="p-2 rounded" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
+                <div style={{ color: "var(--ink-mute)" }}>自動同步</div>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" checked={autoSyncEnabled} onChange={e => setAutoSyncEnabled(e.target.checked)} />
+                  <span>{autoSyncEnabled ? "✓ 開啟" : "關閉"}</span>
+                </label>
+              </div>
+            </div>
+
+            {/* 使用者名稱 (用於 lock.json) */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: "var(--ink-mute)" }}>你的名稱 (給其他人看):</span>
+              <input
+                type="text"
+                className="input-text-plain text-sm flex-1"
+                placeholder="例:湯先生"
+                value={fsaUserName}
+                onChange={e => setFsaUserName(e.target.value)}
+                style={{ maxWidth: "200px" }}
+              />
+            </div>
+
+            {/* 衝突警示 */}
+            {lockInfo && lockInfo.user && lockInfo.user !== fsaUserName && (
+              <div className="p-3 rounded" style={{ background: "#fef9ec", border: "1px solid var(--gold)" }}>
+                <div className="text-sm font-medium" style={{ color: "var(--gold)" }}>
+                  ⚠ 另一位使用者正在編輯
+                </div>
+                <div className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                  <b>{lockInfo.user}</b> 在 {new Date(lockInfo.time).toLocaleTimeString("zh-TW")} 開始編輯,目前你看到的版本可能不是最新。
+                  建議等對方完成,或先按「重新從雲端讀取」更新到最新版。
+                </div>
+              </div>
+            )}
+
+            {/* 訊息列 */}
+            {fsaStatus.msg && (
+              <div className="text-xs p-2 rounded" style={{
+                background: fsaStatus.msg.startsWith("⚠") ? "#fef9ec" : "#f5fbef",
+                color: fsaStatus.msg.startsWith("⚠") ? "var(--gold)" : "var(--green)"
+              }}>
+                {fsaStatus.msg}
+              </div>
+            )}
+
+            {/* 操作按鈕 */}
+            <div className="flex gap-2">
+              <button className="btn-secondary text-sm flex-1" onClick={() => syncFromFolder(fsaHandle, true)} title="從資料夾重新讀取 tax.json,覆蓋本機">
+                ↓ 重新從雲端讀取
+              </button>
+              <button className="btn-secondary text-sm flex-1" onClick={() => writeToFolder()} title="把本機資料寫入資料夾">
+                ↑ 立刻寫入雲端
+              </button>
+              <button className="btn-secondary text-sm" onClick={releaseLock} title="清除 lock.json,通知其他人你已停止編輯">
+                🔓 解除編輯狀態
+              </button>
+              <button className="btn-danger text-sm" onClick={disconnectFolder}>中斷連結</button>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-cols-2 gap-5">
         <div className="card p-5">
@@ -10014,8 +10342,10 @@ function DataPage({ data, setData }) {
           </div>
         </div>
         <div className="text-xs mt-3 p-3 rounded" style={{ background: "#fafaf6", color: "var(--ink-soft)" }}>
-          ※ 本系統不傳送資料到任何伺服器,所有資料只存在你的瀏覽器中 (localStorage)。
-          清除瀏覽器資料會遺失所有紀錄,請定期匯出 JSON 備份。
+          ※ 本系統不傳送資料到任何伺服器,資料只存在你的瀏覽器中 (localStorage) 或你選擇的本地資料夾。
+          清除瀏覽器資料會遺失本機紀錄,請定期匯出 JSON 備份或設定資料夾同步。
+          <br/>
+          ※ 多人協作:請參考上方「📁 同步資料夾」區。建議搭配 Synology Drive Client、Dropbox、OneDrive 等同步軟體使用。
         </div>
       </div>
     </div>
