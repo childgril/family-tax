@@ -37,6 +37,9 @@
   .font-serif { font-family: 'Noto Serif TC', serif; }
   .font-mono { font-family: 'JetBrains Mono', monospace; }
   .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  /* 重要數字 — 應自繳、應納、淨額、總額等加大 */
+  .num-big { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 1.15em; font-weight: 600; }
+  .num-hero { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 1.5em; font-weight: 700; letter-spacing: -0.01em; }
   .sidebar-item { transition: all 0.18s ease; }
   .sidebar-item:hover { background: var(--bg-sidebar-hover); }
   .sidebar-item.active { background: var(--bg-sidebar-active); }
@@ -48,11 +51,11 @@
   .card-bordered { background: var(--bg-card); border: 1px solid var(--line); }
   .input-text {
     background: #fafaf6; border: 1px solid var(--line); border-radius: 3px;
-    padding: 0.5rem 0.75rem; font-family: 'JetBrains Mono', monospace;
+    padding: 0.55rem 0.8rem; font-family: 'JetBrains Mono', monospace;
     transition: border-color 0.15s;
   }
   .input-text:focus { outline: none; border-color: var(--accent); background: white; }
-  .input-text-plain { background: #fafaf6; border: 1px solid var(--line); border-radius: 3px; padding: 0.5rem 0.75rem; }
+  .input-text-plain { background: #fafaf6; border: 1px solid var(--line); border-radius: 3px; padding: 0.55rem 0.8rem; }
   .input-text-plain:focus { outline: none; border-color: var(--accent); background: white; }
   /* 隱藏 type=number 的上下箭頭 (spinner) — 容易誤按 */
   input[type=number]::-webkit-inner-spin-button,
@@ -74,8 +77,8 @@
   }
   .btn-danger:hover { background: var(--red-soft); }
   .chip {
-    display: inline-flex; align-items: center; padding: 0.2rem 0.55rem;
-    border-radius: 2px; font-size: 0.72rem; font-weight: 500;
+    display: inline-flex; align-items: center; padding: 0.22rem 0.6rem;
+    border-radius: 2px; font-size: 0.78rem; font-weight: 500;
     border: 1px solid var(--line);
   }
   .chip-green { background: var(--green-soft); border-color: var(--green); color: #3d5235; }
@@ -85,7 +88,7 @@
   .divider-double { border-top: 3px double var(--line); }
   .table-row { border-bottom: 1px solid var(--line-soft); }
   .table-row:hover { background: #fafaf6; }
-  .ornament { letter-spacing: 0.3em; color: var(--ink-mute); font-size: 0.7rem; }
+  .ornament { letter-spacing: 0.28em; color: var(--ink-mute); font-size: 0.78rem; font-weight: 500; }
   details > summary { list-style: none; cursor: pointer; }
   details > summary::-webkit-details-marker { display: none; }
   .chevron { transition: transform 0.2s; }
@@ -2075,8 +2078,8 @@ function PageHeader({ title, subtitle, ornament, right }) {
     <div className="mb-6 flex items-end justify-between">
       <div>
         <div className="ornament mb-1">{ornament}</div>
-        <h1 className="font-serif text-3xl" style={{ color: "var(--ink)" }}>{title}</h1>
-        {subtitle && <div className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>{subtitle}</div>}
+        <h1 className="font-serif text-4xl" style={{ color: "var(--ink)", letterSpacing: "-0.01em" }}>{title}</h1>
+        {subtitle && <div className="text-sm mt-1.5" style={{ color: "var(--ink-soft)" }}>{subtitle}</div>}
       </div>
       {right}
     </div>
@@ -5179,7 +5182,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             </span>
           )}
           <input
-            className="font-serif text-2xl flex-1 px-2 py-1 border-b-2"
+            className="font-serif text-3xl flex-1 px-2 py-1 border-b-2"
             style={{
               borderColor: "var(--line)",
               background: "transparent",
@@ -6484,7 +6487,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     toNum(filing.itemizedDeductions.mortgageInterest)
                   )}
                 </td>
-                <td colSpan={2} className="px-3 py-2 text-right num font-medium" style={{ fontSize: "16px", color: "var(--accent-deep)" }}>
+                <td colSpan={2} className="px-3 py-2 text-right num font-medium" style={{ fontSize: "17px", color: "var(--accent-deep)" }}>
                   {(() => {
                     // 永遠顯示列舉合計 (不管是否採用),這樣使用者知道列舉是多少
                     const overrides = filing.itemizedDeductions.overrides || {};
@@ -7050,18 +7053,18 @@ function CollapsibleCard({ title, subtitle, headerExtra, children, defaultOpen =
   return (
     <div className="card" style={{ borderColor: borderColor || undefined }}>
       <div
-        className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+        className="px-5 py-3.5 flex items-center justify-between cursor-pointer hover:bg-gray-50"
         style={{ borderBottom: open ? "1px solid var(--line)" : "none", background: headerBg }}
         onClick={() => setOpen(!open)}
       >
         <div className="flex items-center gap-2 flex-1">
-          <span className="text-xs" style={{ color: "var(--ink-mute)", minWidth: "12px" }}>
+          <span className="text-sm" style={{ color: "var(--ink-mute)", minWidth: "14px" }}>
             {open ? "▼" : "▶"}
           </span>
           <div className="flex-1">
-            <div className="ornament" style={{ color: titleColor || "var(--ink-soft)" }}>{title}</div>
+            <div className="font-serif" style={{ color: titleColor || "var(--ink)", fontSize: "1.1rem", fontWeight: 500, letterSpacing: "0.02em" }}>{title}</div>
             {subtitle && (
-              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{subtitle}</div>
+              <div className="text-xs mt-0.5" style={{ color: "var(--ink-mute)" }}>{subtitle}</div>
             )}
           </div>
           {headerExtra && (
@@ -7512,7 +7515,7 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                       <span className="text-[10px] ml-auto" style={{ color: "var(--ink-mute)" }}>補繳稅額:</span>
                       <input type="number"
                         className="input-text-plain text-xs text-right font-medium"
-                        style={{ width: "120px", color: amtColor, fontSize: "14px" }}
+                        style={{ width: "120px", color: amtColor, fontSize: "17px" }}
                         placeholder="0"
                         value={a.amount || ""}
                         onChange={e => updateAdjustment(a.id, { amount: Number(e.target.value) || 0 })} />
@@ -7637,7 +7640,7 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                 )}
                 <tr className="font-medium" style={{ borderTop: "1px solid var(--line)" }}>
                   <td className="pt-1.5">最終本年度淨支出</td>
-                  <td className="text-right pt-1.5" style={{ fontSize: "14px", color: "var(--accent-deep)" }}>
+                  <td className="text-right pt-1.5" style={{ fontSize: "17px", color: "var(--accent-deep)" }}>
                     {(() => {
                       const final = (hasActual ? actualNum : sysFinal) + adjTotal;
                       return final >= 0 ? `補繳 ${fmt(final)}` : `退稅 ${fmt(-final)}`;
@@ -8476,13 +8479,13 @@ function OfficialFormView({ result, year, filing, onChange }) {
           background: finalDue === 0 ? "#8a8578" : "var(--green)",
           color: "white",
         }}>
-          <div className="ornament" style={{ color: "#a8a293" }}>
+          <div style={{ color: "#a8a293", letterSpacing: "0.28em", fontSize: "0.85rem", fontWeight: 500 }}>
             YEAR {year} {finalDue > 0 ? "TAX TO PAY" : finalDue < 0 ? "TAX REFUND" : "BALANCED"}
           </div>
-          <div className="font-serif num mt-2" style={{ fontSize: "48px", fontWeight: 500, lineHeight: 1 }}>
+          <div className="font-serif num mt-2" style={{ fontSize: "64px", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.05 }}>
             {fmt(Math.abs(finalDue))}
           </div>
-          <div className="text-xs mt-2" style={{ color: "#a8a293" }}>
+          <div className="text-sm mt-3" style={{ color: "#a8a293" }}>
             {finalDue > 0 ? "應補繳稅額" : finalDue < 0 ? "可退稅金額" : "剛好平衡 · 無補繳無退稅"} (新臺幣 元)
           </div>
         </div>
@@ -8584,7 +8587,7 @@ function OfficialFormView({ result, year, filing, onChange }) {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr style={{ fontSize: "14px" }}>
+                          <tr style={{ fontSize: "17px" }}>
                             <td className="text-center">{fmt(isAllSep ? (f.mainGrossAfterSalary || 0) : (f.mainSalary || 0))}</td>
                             <td className="text-center">−</td>
                             <td className="text-center">{fmt(f.mainExemption || 0)}</td>
@@ -8627,7 +8630,7 @@ function OfficialFormView({ result, year, filing, onChange }) {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr style={{ fontSize: "14px" }}>
+                          <tr style={{ fontSize: "17px" }}>
                             <td className="text-center">{fmt(grossIncome)}</td>
                             <td className="text-center">−</td>
                             <td className="text-center">{fmt(isAllSep ? (f.mainGrossAfterSalary || 0) : (f.mainSalary || 0))}</td>
@@ -8674,7 +8677,7 @@ function OfficialFormView({ result, year, filing, onChange }) {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr style={{ fontSize: "16px" }}>
+                      <tr style={{ fontSize: "17px" }}>
                         <td className="text-center">{fmt(grossIncome)}</td>
                         <td className="text-center">−</td>
                         <td className="text-center">{fmt(exemption)}</td>
@@ -8704,7 +8707,7 @@ function OfficialFormView({ result, year, filing, onChange }) {
                       </tr>
                     </thead>
                     <tbody>
-                <tr style={{ fontSize: "16px" }}>
+                <tr style={{ fontSize: "17px" }}>
                   <td className="text-center">{fmt(netIncome)}</td>
                   <td className="text-center">×</td>
                   <td className="text-center">{(rate * 100).toFixed(0)}%</td>
@@ -8741,7 +8744,7 @@ function OfficialFormView({ result, year, filing, onChange }) {
                 </tr>
               </thead>
               <tbody>
-                <tr style={{ fontSize: "16px" }}>
+                <tr style={{ fontSize: "17px" }}>
                   <td className="text-center">{fmt(taxBeforeCredits)}</td>
                   <td className="text-center">−</td>
                   <td className="text-center" style={{ color: "var(--ink-mute)" }}>0</td>
@@ -8756,7 +8759,8 @@ function OfficialFormView({ result, year, filing, onChange }) {
                   <td className="text-center">=</td>
                   <td className="text-center font-medium" style={{
                     color: finalDue >= 0 ? "var(--accent-deep)" : "var(--green)",
-                    fontSize: "18px",
+                    fontSize: "22px",
+                    fontWeight: 700,
                   }}>
                     {fmt(Math.abs(finalDue))}
                   </td>
@@ -9060,19 +9064,19 @@ function ResultPanel({ result, year, members, filing }) {
                 background: result.finalDue === 0 ? "#8a8578" : "var(--green)",
                 color: "white"
               }}>
-                <div className="ornament" style={{ color: "#a8a293" }}>
+                <div style={{ color: "#a8a293", letterSpacing: "0.28em", fontSize: "0.85rem", fontWeight: 500 }}>
                   YEAR {year} {result.finalDue > 0 ? "TAX TO PAY" : result.finalDue < 0 ? "TAX REFUND" : "BALANCED"}
                 </div>
-                <div className="font-serif text-5xl num mt-2">{fmt(Math.abs(result.finalDue))}</div>
-                <div className="text-xs mt-2" style={{ color: "#a8a293" }}>
+                <div className="font-serif num mt-2" style={{ fontSize: "4rem", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>{fmt(Math.abs(result.finalDue))}</div>
+                <div className="text-sm mt-3" style={{ color: "#a8a293" }}>
                   {result.finalDue > 0 ? "應補繳稅額" : result.finalDue < 0 ? "可退稅金額" : "剛好平衡 · 無補繳無退稅"} (新臺幣 元)
                 </div>
               </div>
 
               <div className="p-3 rounded mb-3" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
                 <div className="ornament mb-2">TAX BREAKDOWN · 稅額構成</div>
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between"><span>綜所稅額</span><span className="num">{fmt(result.tax)}</span></div>
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between"><span>綜所稅額</span><span className="num font-medium">{fmt(result.tax)}</span></div>
                   {result.totalCreditsBeforePrepaid > 0 && (
                     <div className="flex justify-between" style={{ color: "var(--green)" }}>
                       <span>− 抵減合計</span><span className="num">{fmt(result.totalCreditsBeforePrepaid)}</span>
@@ -9083,12 +9087,12 @@ function ResultPanel({ result, year, members, filing }) {
                       <span>− 已預扣繳</span><span className="num">{fmt(result.prepaidTax)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between border-t pt-1 mt-1 font-medium" style={{
+                  <div className="flex justify-between items-center border-t pt-1.5 mt-1.5 font-medium" style={{
                     borderColor: "var(--line)",
                     color: result.finalDue > 0 ? "var(--ink)" : result.finalDue < 0 ? "var(--green)" : "var(--ink-mute)"
                   }}>
-                    <span>{result.finalDue > 0 ? "應補繳" : result.finalDue < 0 ? "應退稅" : "平衡 (無補退)"}</span>
-                    <span className="num">{fmt(Math.abs(result.finalDue))}</span>
+                    <span className="text-sm">{result.finalDue > 0 ? "應補繳" : result.finalDue < 0 ? "應退稅" : "平衡 (無補退)"}</span>
+                    <span className="num" style={{ fontSize: "20px", fontWeight: 700 }}>{fmt(Math.abs(result.finalDue))}</span>
                   </div>
                   {result.finalDue === 0 && result.prepaidTax === 0 && result.tax === 0 && (
                     <div className="text-[10px] mt-1 p-1.5 rounded" style={{ background: "white", color: "var(--ink-mute)" }}>
