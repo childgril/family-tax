@@ -5476,12 +5476,24 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   className="text-[10px] hover:underline"
                   style={{ color: "var(--accent)" }}
                   onClick={() => {
-                    // 自動建一筆 entry 帶補繳標記 (來自上一年的補繳通知)
+                    if (h.type === "supplement_rental") {
+                      // 租金 → 跳到 ② 並展開租賃區
+                      setRentalSectionCollapsed(false);
+                      setTimeout(() => {
+                        const el = document.getElementById("section-rental");
+                        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }, 100);
+                      // 關閉這條提醒 (使用者要記得在 ② 調申報應稅)
+                      const next = (filing.carriedAdjustmentsHint || []).filter((_, i) => i !== idx);
+                      onChange({ ...filing, carriedAdjustmentsHint: next });
+                      return;
+                    }
+                    // 所得 → 自動建一筆 entry 帶補繳標記
                     const preset = {
                       id: uid(),
                       ownerId: filing.taxpayerId || "",
-                      category: h.type === "supplement_rental" ? "rental" : "other",
-                      code: h.type === "supplement_rental" ? "51" : "50",
+                      category: "other",
+                      code: "50",
                       source: "",
                       taxId: "",
                       gross: 0,
@@ -5490,7 +5502,6 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       note: `來自 ${h.year} 年補繳通知${h.docNo ? ` (公文 ${h.docNo})` : ""}${h.reason ? ` · ${h.reason}` : ""}`,
                       supplementOriginYear: h.year,
                     };
-                    onChange({ ...filing, incomeEntries: [...(filing.incomeEntries || []), preset] });
                     // 滾到 ① 並關閉這條提醒
                     setTimeout(() => {
                       const el = document.getElementById("section-income");
@@ -5503,9 +5514,9 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       onChange({ ...filing, incomeEntries: [...(filing.incomeEntries || []), preset], carriedAdjustmentsHint: next });
                     }, 100);
                   }}
-                  title="自動建一筆 entry 並關閉這條提醒"
+                  title={h.type === "supplement_rental" ? "跳到 ② 租賃紀錄輸入" : "自動建一筆 entry 並關閉這條提醒"}
                 >
-                  + 建立 entry
+                  {h.type === "supplement_rental" ? "→ 跳到 ②" : "+ 建立 entry"}
                 </button>
                 <button
                   className="text-[10px]"
@@ -7009,13 +7020,30 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         systemFinalDue={result.finalDue}
         properties={householdProperties} members={members}
         createSupplementEntry={(adj) => {
-          // 從一筆 adjustment 自動建立一筆 entry,預帶補繳年份標記 + 原因說明
-          const supplementYear = filing.year;  // 當下 filing 的年份就是「補繳發生在哪一年」
+          // 補繳·新增所得 → 在 ① 建一筆 entry,自動跳到 ①
+          // 補繳·新增租金 → 自動勾選相關物件 + 跳到 ② (使用者再去調申報應稅)
+          const supplementYear = filing.year;
+
+          if (adj.type === "supplement_rental") {
+            // 找該屋主的物件,自動勾選計入 (若還沒勾)
+            // 簡單做法:直接跳到 ②,並展開租賃區
+            setTimeout(() => {
+              const el = document.getElementById("section-rental");
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "start" });
+                // 展開租賃 section
+                setRentalSectionCollapsed(false);
+              }
+            }, 100);
+            return;
+          }
+
+          // 補繳·新增所得 → 在 ① 建 entry
           const preset = {
             id: uid(),
             ownerId: filing.taxpayerId || "",
-            category: adj.type === "supplement_rental" ? "rental" : "other",
-            code: adj.type === "supplement_rental" ? "51" : "50",
+            category: "other",
+            code: "50",
             source: "",
             taxId: "",
             gross: 0,
@@ -7653,9 +7681,13 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                       <div className="p-2 rounded mb-2 flex items-center gap-3" style={{ background: "white", border: "1px dashed var(--gold)" }}>
                         <div className="text-[10px] flex-1" style={{ color: "var(--ink-soft)" }}>
                           {a.type === "supplement_rental"
-                            ? "📋 點右側按鈕,自動到 ① 建一筆「租賃所得 51」entry,你只要填金額"
+                            ? "📋 點右側按鈕跳到 ② 租賃紀錄輸入,去調整該物件的「申報應稅」金額"
                             : "📋 點右側按鈕,自動到 ① 建一筆「其他所得 50」entry,你只要填金額"}
-                          <span className="ml-2" style={{ color: "var(--gold)" }}>會帶「來自 {filing.year} 年補繳通知」標記,明年自動再帶過去</span>
+                          <span className="ml-2" style={{ color: "var(--gold)" }}>
+                            {a.type === "supplement_rental"
+                              ? "明年同物件會延續這筆補列(從去年帶出)"
+                              : "會帶「來自 " + filing.year + " 年補繳通知」標記,明年自動再帶過去"}
+                          </span>
                         </div>
                         <button
                           className="btn-primary text-[10px] px-2 py-1"
@@ -7664,9 +7696,9 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                               createSupplementEntry(a);
                             }
                           }}
-                          title="自動建一筆 entry,預帶補繳年份標記"
+                          title={a.type === "supplement_rental" ? "跳到 ② 租賃紀錄輸入" : "自動建一筆 entry,預帶補繳年份標記"}
                         >
-                          + 建立補繳 entry
+                          {a.type === "supplement_rental" ? "→ 跳到 ② 補列租金" : "+ 建立補繳 entry"}
                         </button>
                       </div>
                     )}
