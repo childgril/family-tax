@@ -3377,17 +3377,7 @@ function PropertiesPage({ data, setData, year }) {
                   .filter(c => !c.isPublic && !c.overriddenByPublic)
                   .reduce((s, c) => s + c.months, 0);
                 const hasActiveThisYear = agg.anyContractInYear;
-
-                let filingType, filingChip;
-                if (publicMonths > 0 && generalEffectiveMonths > 0) {
-                  filingType = "一般 + 公益"; filingChip = "chip-accent";
-                } else if (publicMonths > 0) {
-                  filingType = "公益"; filingChip = "chip-green";
-                } else if (generalEffectiveMonths > 0) {
-                  filingType = "一般"; filingChip = "chip-amber";
-                } else {
-                  filingType = "—"; filingChip = "";
-                }
+                // filingType 移到後面計算 (要等 actualGeneralRent / actualPublicRent 算出來)
 
                 const isExpanded = expandedId === p.id;
                 const rowBg = isExpanded ? "var(--accent-soft)"
@@ -3466,6 +3456,26 @@ function PropertiesPage({ data, setData, year }) {
                 const hasGeneralTaxableOnly = isIncludedInFiling && actualGeneralRent === 0 && actualGeneralTaxable > 0;
                 const hasAnyData = hasGeneralData || hasPublicData || hasGeneralTaxableOnly;
 
+                // === 報稅方式 — 依「實際申報金額」判定,而非合約存在 ===
+                // 規則:
+                //   - 未勾選計入 → 無申報
+                //   - 一般 + 公益申報金額都 > 0 → 一般 + 公益
+                //   - 只有公益 > 0 → 公益
+                //   - 只有一般 > 0 → 一般
+                //   - 都是 0 (合約存在但都調整為 0,或未勾選) → 無申報
+                let filingType, filingChip;
+                if (!isIncludedInFiling) {
+                  filingType = "—"; filingChip = "";
+                } else if ((hasGeneralData || hasGeneralTaxableOnly) && hasPublicData) {
+                  filingType = "一般 + 公益"; filingChip = "chip-accent";
+                } else if (hasPublicData) {
+                  filingType = "公益"; filingChip = "chip-green";
+                } else if (hasGeneralData || hasGeneralTaxableOnly) {
+                  filingType = "一般"; filingChip = "chip-amber";
+                } else {
+                  filingType = "無申報"; filingChip = "";
+                }
+
                 return (
                   <React.Fragment key={p.id}>
                     <tr className="table-row cursor-pointer"
@@ -3494,6 +3504,8 @@ function PropertiesPage({ data, setData, year }) {
                       <td className="px-3 py-3 text-center align-top">
                         {filingChip ? (
                           <span className={`chip ${filingChip} text-xs`}>{filingType}</span>
+                        ) : filingType === "無申報" ? (
+                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>無申報</span>
                         ) : (
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
