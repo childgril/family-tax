@@ -2623,51 +2623,52 @@ function Dashboard({ data, year, setPage }) {
           </div>
         </div>
         <div className="overflow-x-auto" style={{ maxHeight: "70vh", overflowY: "auto" }}>
-          <table className="w-full text-xs" style={{ borderCollapse: "collapse" }}>
+          <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
             <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
               <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)", boxShadow: "0 2px 4px rgba(0,0,0,0.04)" }}>
-                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", borderRight: "1px solid var(--line)", background: "#fafaf6" }}>屋主</th>
-                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", borderRight: "1px solid var(--line)", background: "#fafaf6" }}>物件</th>
+                <th className="text-center px-3 py-2.5 text-sm font-medium" style={{ color: "var(--ink-soft)", borderRight: "1px solid var(--line)", background: "#fafaf6" }}>屋主</th>
+                <th className="text-left px-3 py-2.5 text-sm font-medium" style={{ color: "var(--ink-soft)", borderRight: "1px solid var(--line)", background: "#fafaf6" }}>物件</th>
                 {AVAILABLE_YEARS.map((y, i) => (
-                  <th key={y} className="text-right px-2 py-2 font-medium" style={{
-                    color: "var(--ink-mute)",
-                    minWidth: "110px",
+                  <th key={y} className="text-right px-2 py-2.5 text-sm font-medium" style={{
+                    color: "var(--ink-soft)",
+                    minWidth: "120px",
                     borderRight: i < AVAILABLE_YEARS.length - 1 ? "1px solid var(--line)" : "none",
                     background: "#fafaf6",
                   }}>
                     <div>{y} 年度</div>
-                    <div className="text-[8px] font-normal" style={{ color: "var(--ink-mute)" }}>整年租金</div>
+                    <div className="text-[10px] font-normal" style={{ color: "var(--ink-mute)" }}>整年租金</div>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rentalCompareRows.length === 0 ? (
-                <tr><td colSpan={AVAILABLE_YEARS.length + 2} className="text-center py-6 text-xs" style={{ color: "var(--ink-mute)" }}>尚無租賃物件</td></tr>
+                <tr><td colSpan={AVAILABLE_YEARS.length + 2} className="text-center py-6 text-sm" style={{ color: "var(--ink-mute)" }}>尚無租賃物件</td></tr>
               ) : rentalCompareRows.map(({ property, owner, byYear }) => (
                 <tr key={property.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
-                  <td className="px-3 py-2 text-[11px]" style={{ borderRight: "1px solid var(--line-soft)" }}>{owner?.name || "—"}</td>
-                  <td className="px-3 py-2" style={{ borderRight: "1px solid var(--line-soft)" }}>
-                    <div className="text-[11px]">{property.address || property.name}</div>
+                  <td className="px-3 py-2.5 text-sm text-center font-medium" style={{ borderRight: "1px solid var(--line-soft)" }}>{owner?.name || "—"}</td>
+                  <td className="px-3 py-2.5" style={{ borderRight: "1px solid var(--line-soft)" }}>
+                    <div className="text-sm">{property.address || property.name}</div>
                     {property.assetType === "land" && (
-                      <span className="text-[9px]" style={{ color: "var(--gold)" }}>🌳 土地</span>
+                      <span className="text-[10px]" style={{ color: "var(--gold)" }}>🌳 土地</span>
                     )}
                   </td>
                   {AVAILABLE_YEARS.map((y, i) => {
                     const d = byYear[y];
                     const cellBorder = i < AVAILABLE_YEARS.length - 1 ? "1px solid var(--line-soft)" : "none";
                     if (!d || d.contractsCount === 0) {
-                      return <td key={y} className="text-right px-2 py-2 text-xs" style={{ color: "var(--ink-mute)", borderRight: cellBorder }}>—</td>;
+                      return <td key={y} className="text-right px-2 py-2.5 text-sm" style={{ color: "var(--ink-mute)", borderRight: cellBorder }}>—</td>;
                     }
                     return (
-                      <td key={y} className="text-right px-2 py-2" style={{ borderRight: cellBorder }}>
+                      <td key={y} className="text-right px-2 py-2.5" style={{ borderRight: cellBorder }}>
                         <div className="num font-medium" style={{
                           color: d.included ? "var(--accent-deep)" : "var(--ink-mute)",
                           textDecoration: d.included ? "none" : "line-through",
+                          fontSize: "15px",
                         }}>
                           {fmt(d.annualRent)}
                         </div>
-                        <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
                           {d.typeLabel} · {Number.isInteger(d.months) ? d.months : d.months.toFixed(1)} 個月
                           {!d.included && <span className="ml-1" style={{ color: "var(--gold)" }}>(未計入)</span>}
                         </div>
@@ -6079,16 +6080,22 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       <div className="font-serif num text-base">
                         {isIncluded ? fmt(taxableTotal) : <span style={{ color: "var(--ink-mute)" }}>不計入</span>}
                       </div>
-                      {lastYearAgg.anyContractInYear && isIncluded && (
-                        <div className="text-[10px]" style={{
-                          color: taxableTotal > lastYearTaxable ? "var(--accent-deep)" :
-                                 taxableTotal < lastYearTaxable ? "var(--green)" : "var(--ink-mute)"
-                        }}>
-                          {taxableTotal === lastYearTaxable ? "持平" :
-                           taxableTotal > lastYearTaxable ? `↑ +${fmt(taxableTotal - lastYearTaxable)}` :
-                           `↓ -${fmt(lastYearTaxable - taxableTotal)}`}
-                        </div>
-                      )}
+                      {(() => {
+                        // 用 priorYearsData 拿前一年 (year-1) 比較
+                        const lastYearData = priorYearsData.find(pd => pd.year === year - 1);
+                        if (!lastYearData || !isIncluded) return null;
+                        const lastYearTaxable = lastYearData.taxable;
+                        return (
+                          <div className="text-[10px]" style={{
+                            color: taxableTotal > lastYearTaxable ? "var(--accent-deep)" :
+                                   taxableTotal < lastYearTaxable ? "var(--green)" : "var(--ink-mute)"
+                          }}>
+                            {taxableTotal === lastYearTaxable ? "持平" :
+                             taxableTotal > lastYearTaxable ? `↑ +${fmt(taxableTotal - lastYearTaxable)}` :
+                             `↓ -${fmt(lastYearTaxable - taxableTotal)}`}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </summary>
 
