@@ -7888,43 +7888,7 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                         onChange={e => updateAdjustment(a.id, { reason: e.target.value })} />
                     </div>
 
-                    {/* 第三列: 公文文號 / 站號 / 公文連結 */}
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="flex items-center gap-1">
-                        <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>公文文號:</span>
-                        <input type="text"
-                          className="input-text-plain text-xs flex-1 num"
-                          placeholder="例: 北稅核字第 1XXXXX 號"
-                          value={a.docNo || ""}
-                          onChange={e => updateAdjustment(a.id, { docNo: e.target.value })} />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>站號/承辦:</span>
-                        <input type="text"
-                          className="input-text-plain text-xs flex-1"
-                          placeholder="例: 北稅信義分局 02-2XXX"
-                          value={a.station || ""}
-                          onChange={e => updateAdjustment(a.id, { station: e.target.value })} />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>公文連結:</span>
-                        <input type="url"
-                          className="input-text-plain text-xs flex-1"
-                          placeholder="https://..."
-                          value={a.docUrl || ""}
-                          onChange={e => updateAdjustment(a.id, { docUrl: e.target.value })} />
-                        {a.docUrl && (
-                          <a href={a.docUrl} target="_blank" rel="noopener noreferrer"
-                            className="text-[10px] hover:underline px-1"
-                            style={{ color: "var(--accent)" }}
-                            title="開啟連結">
-                            ↗
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* 第四列: 備註 (optional, 可摺疊) */}
+                    {/* 第三列: 備註 (optional, 可摺疊) */}
                     {(a.note || a.showNote) && (
                       <div className="flex items-center gap-2 mt-1.5">
                         <span className="text-[10px]" style={{ minWidth: "55px", color: "var(--ink-mute)" }}>備註:</span>
