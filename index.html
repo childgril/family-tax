@@ -5574,6 +5574,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
         onRemove={removeEntry}
         payerDirectory={payerDirectory}
         savePayer={savePayer}
+        adjustments={filing.adjustments || []}
       />
       </div>
 
@@ -8184,7 +8185,7 @@ function codeQualifiesFor85Credit(code) {
   const c = String(code).trim().toUpperCase();
   return c === "54" || c === "54C";
 }
-function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, groupByMember, payerDirectory, onSavePayer) {
+function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, groupByMember, payerDirectory, onSavePayer, supplementMap) {
   const cat = CATEGORIES[e.category];
   const net = computeEntryNet(e);
   // helper: 看名稱反查統編 / 統編反查名稱
@@ -8194,6 +8195,8 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
     const found = Object.entries(payerDirectory).find(([, n]) => n === name);
     return found ? found[0] : null;
   };
+  // 該 entry 對應的補繳金額 (從 supplementMap 找)
+  const supplementInfo = supplementMap && supplementMap[e.id];
   return (
     <tr key={e.id} style={{
       borderBottom: "1px solid var(--line-soft)",
@@ -8201,8 +8204,11 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
     }}>
       <td className="px-2 py-1">
         {e.supplementOriginYear && (
-          <div className="text-[9px] mb-0.5" style={{ color: "var(--gold)" }} title={`來自 ${e.supplementOriginYear} 年補繳新增`}>
+          <div className="text-[10px] mb-0.5" style={{ color: "var(--gold)" }} title={`來自 ${e.supplementOriginYear} 年補繳新增`}>
             ⚠ 補繳新增 ({e.supplementOriginYear})
+            {supplementInfo && supplementInfo.amount > 0 && (
+              <span className="ml-1 num font-medium">· 補繳 {fmt(supplementInfo.amount)}</span>
+            )}
           </div>
         )}
         <select className="input-text-plain text-xs w-full" value={e.category}
@@ -8345,7 +8351,44 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
   );
 }
 
-function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove, payerDirectory, savePayer }) {
+function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove, payerDirectory, savePayer, adjustments }) {
+  // 建立 supplementMap: 對每個 entry,根據 supplementOriginYear 找對應的 adjustment 金額
+  // 規則:supplement_income 對應 supplementOriginYear=當年的 income entries (rental 對 rental, 其他對 other)
+  //       一個年份多筆補繳 → 平均分配給該年份的 supplement entries
+  const supplementMap = React.useMemo(() => {
+    if (!adjustments || adjustments.length === 0) return {};
+    const map = {};
+    const supplementByYearAndType = {};  // {year: {income: total, rental: total}}
+    adjustments.forEach(a => {
+      if (a.type !== "supplement_income" && a.type !== "supplement_rental") return;
+      // 用 adjustment 自己的 supplementOriginYear (或當前 filing year);這裡先用 amount
+      const yearKey = "current";  // 簡化:用「當年」表示
+      const typeKey = a.type === "supplement_rental" ? "rental" : "income";
+      if (!supplementByYearAndType[yearKey]) supplementByYearAndType[yearKey] = { income: 0, rental: 0, incomeCount: 0, rentalCount: 0 };
+      supplementByYearAndType[yearKey][typeKey] += toNum(a.amount);
+    });
+    // 對每個 supplement entry 平均分配
+    entries.forEach(e => {
+      if (!e.supplementOriginYear) return;
+      const bucket = supplementByYearAndType["current"];
+      if (!bucket) return;
+      const isRental = e.category === "rental";
+      const typeKey = isRental ? "rental" : "income";
+      if (!bucket[typeKey + "Count"]) {
+        // 算這年該類型有幾筆 entry
+        const sameTypeCount = entries.filter(en =>
+          en.supplementOriginYear === e.supplementOriginYear &&
+          ((en.category === "rental") === isRental)
+        ).length;
+        bucket[typeKey + "Count"] = sameTypeCount || 1;
+      }
+      const perEntry = bucket[typeKey] / bucket[typeKey + "Count"];
+      if (perEntry > 0) {
+        map[e.id] = { amount: Math.round(perEntry) };
+      }
+    });
+    return map;
+  }, [entries, adjustments]);
   const [expanded, setExpanded] = React.useState(true);  // 預設展開
   const [filter, setFilter] = React.useState("all");
   const [memberFilter, setMemberFilter] = React.useState("all");
@@ -8523,7 +8566,7 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove, payer
                     {(() => {
                       // 如果勾選分組,先按成員分;否則按原順序
                       if (!groupByMember) {
-                        return visibleEntries.map(e => renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, false, payerDirectory, savePayer));
+                        return visibleEntries.map(e => renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, false, payerDirectory, savePayer, supplementMap));
                       }
                       // 按成員分組:把同一成員的列放一起,中間插分隔列
                       const memberGroups = {};
@@ -8548,7 +8591,7 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove, payer
                             </td>
                           </tr>
                         );
-                        grpItems.forEach(e => rows.push(renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, true, payerDirectory, savePayer)));
+                        grpItems.forEach(e => rows.push(renderEntryRow(e, INCOME_CATEGORIES, INCOME_CODES, members, onUpdate, onRemove, true, payerDirectory, savePayer, supplementMap)));
                       });
                       return rows;
                     })()}
@@ -8767,20 +8810,55 @@ function OfficialFormView({ result, year, filing, onChange }) {
 
       {/* 大塊綠色補繳/退稅顯示 + 採用列舉省了多少 */}
       <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
-        {/* 左 2/3: 退稅/補繳大字 */}
-        <div className="md:col-span-2 text-center p-6 rounded" style={{
-          background: finalDue === 0 ? "#8a8578" : "var(--green)",
-          color: "white",
-        }}>
-          <div style={{ color: "#a8a293", letterSpacing: "0.28em", fontSize: "0.85rem", fontWeight: 500 }}>
-            YEAR {year} {finalDue > 0 ? "TAX TO PAY" : finalDue < 0 ? "TAX REFUND" : "BALANCED"}
-          </div>
-          <div className="font-serif num mt-2" style={{ fontSize: "64px", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.05 }}>
-            {fmt(Math.abs(finalDue))}
-          </div>
-          <div className="text-sm mt-3" style={{ color: "#a8a293" }}>
-            {finalDue > 0 ? "應補繳稅額" : finalDue < 0 ? "可退稅金額" : "剛好平衡 · 無補繳無退稅"} (新臺幣 元)
-          </div>
+        {/* 左 2/3: 退稅/補繳大字 — 分為「申報試算」 + 「政府追繳」兩個獨立金額 */}
+        <div className="md:col-span-2">
+          {(() => {
+            const adjustments = filing?.adjustments || [];
+            const supplementTotal = adjustments.reduce((s, a) => {
+              const v = toNum(a.amount);
+              if (a.type === "refund_received") return s - v;
+              return s + v;
+            }, 0);
+            const hasSupplement = adjustments.length > 0;
+            return (
+              <div className="rounded overflow-hidden" style={{ border: "1px solid var(--green)" }}>
+                {/* 主框: 申報試算 */}
+                <div className="text-center p-5" style={{
+                  background: finalDue === 0 ? "#8a8578" : "var(--green)",
+                  color: "white",
+                }}>
+                  <div style={{ color: "#a8a293", letterSpacing: "0.28em", fontSize: "0.78rem", fontWeight: 500 }}>
+                    YEAR {year} · 申報試算
+                  </div>
+                  <div className="font-serif num mt-1" style={{ fontSize: "52px", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.05 }}>
+                    {fmt(Math.abs(finalDue))}
+                  </div>
+                  <div className="text-xs mt-2" style={{ color: "#a8a293" }}>
+                    {finalDue > 0 ? "應補繳稅額" : finalDue < 0 ? "可退稅金額" : "剛好平衡"} (新臺幣 元)
+                  </div>
+                </div>
+                {/* 副框: 政府追繳 */}
+                {hasSupplement && (
+                  <div className="text-center p-3" style={{
+                    background: supplementTotal > 0 ? "#b8772d" : "#5c7048",
+                    color: "white",
+                    borderTop: "1px solid white",
+                  }}>
+                    <div style={{ color: "rgba(255,255,255,0.7)", letterSpacing: "0.28em", fontSize: "0.7rem", fontWeight: 500 }}>
+                      GOV ADJUST · 政府追繳/退補
+                    </div>
+                    <div className="font-serif num mt-0.5" style={{ fontSize: "28px", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+                      {supplementTotal >= 0 ? "+" : "−"}{fmt(Math.abs(supplementTotal))}
+                    </div>
+                    <div className="text-[10px] mt-0.5" style={{ color: "rgba(255,255,255,0.7)" }}>
+                      {supplementTotal > 0 ? `補繳 (${adjustments.length} 筆)` : supplementTotal < 0 ? "淨退稅" : "持平"}
+                      <span className="ml-2">⚠ 此金額不併入「申報試算」</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* 右 1/3: 採用列舉省了多少 + 邊際稅率 */}
@@ -9353,18 +9431,55 @@ function ResultPanel({ result, year, members, filing }) {
           {/* 主數字 */}
           <div className="flex flex-col justify-between">
             <div>
-              <div className="text-center p-6 rounded mb-4" style={{
-                background: result.finalDue === 0 ? "#8a8578" : "var(--green)",
-                color: "white"
-              }}>
-                <div style={{ color: "#a8a293", letterSpacing: "0.28em", fontSize: "0.85rem", fontWeight: 500 }}>
-                  YEAR {year} {result.finalDue > 0 ? "TAX TO PAY" : result.finalDue < 0 ? "TAX REFUND" : "BALANCED"}
-                </div>
-                <div className="font-serif num mt-2" style={{ fontSize: "4rem", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>{fmt(Math.abs(result.finalDue))}</div>
-                <div className="text-sm mt-3" style={{ color: "#a8a293" }}>
-                  {result.finalDue > 0 ? "應補繳稅額" : result.finalDue < 0 ? "可退稅金額" : "剛好平衡 · 無補繳無退稅"} (新臺幣 元)
-                </div>
-              </div>
+              {(() => {
+                // 計算「政府追繳」= 來自 ⑦ adjustments 的 supplement_* / penalty / interest (refund_received 視為負)
+                const adjustments = filing.adjustments || [];
+                const supplementTotal = adjustments.reduce((s, a) => {
+                  const v = toNum(a.amount);
+                  if (a.type === "refund_received") return s - v;
+                  return s + v;
+                }, 0);
+                const hasSupplement = adjustments.length > 0;
+                return (
+                  <div className="rounded mb-4 overflow-hidden" style={{ border: "1px solid var(--green)" }}>
+                    {/* 主框: 申報試算 (系統算的 finalDue) */}
+                    <div className="text-center p-5" style={{
+                      background: result.finalDue === 0 ? "#8a8578" : "var(--green)",
+                      color: "white",
+                    }}>
+                      <div style={{ color: "#a8a293", letterSpacing: "0.28em", fontSize: "0.78rem", fontWeight: 500 }}>
+                        YEAR {year} · 申報試算
+                      </div>
+                      <div className="font-serif num mt-1" style={{ fontSize: "3rem", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+                        {fmt(Math.abs(result.finalDue))}
+                      </div>
+                      <div className="text-xs mt-2" style={{ color: "#a8a293" }}>
+                        {result.finalDue > 0 ? "應補繳稅額" : result.finalDue < 0 ? "可退稅金額" : "剛好平衡"} (新臺幣 元)
+                      </div>
+                    </div>
+
+                    {/* 副框: 政府追繳 (來自 ⑦ adjustments) */}
+                    {hasSupplement && (
+                      <div className="text-center p-4" style={{
+                        background: supplementTotal > 0 ? "#b8772d" : "#5c7048",
+                        color: "white",
+                        borderTop: "1px solid white",
+                      }}>
+                        <div style={{ color: "rgba(255,255,255,0.7)", letterSpacing: "0.28em", fontSize: "0.72rem", fontWeight: 500 }}>
+                          GOV ADJUST · 政府追繳/退補
+                        </div>
+                        <div className="font-serif num mt-1" style={{ fontSize: "2rem", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+                          {supplementTotal >= 0 ? "+" : "−"}{fmt(Math.abs(supplementTotal))}
+                        </div>
+                        <div className="text-[10px] mt-1" style={{ color: "rgba(255,255,255,0.7)" }}>
+                          {supplementTotal > 0 ? `補繳 (${adjustments.length} 筆)` : supplementTotal < 0 ? "淨退稅" : "持平"}
+                          <span className="ml-2">⚠ 此金額不併入「申報試算」</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="p-3 rounded mb-3" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
                 <div className="ornament mb-2">TAX BREAKDOWN · 稅額構成</div>
