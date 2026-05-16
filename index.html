@@ -3448,23 +3448,21 @@ function PropertiesPage({ data, setData, year }) {
                     }
                   }
                 }
-                // 是否「真的有實際申報資料」(勾選 + 有任何金額)
-                // 沒實際資料 → 全部欄位都不上色,不顯示報稅方式 (跟「未勾選」一樣處理)
+                // 只看「實際申報租金 > 0」才算有資料、才上色
+                // 租金 0 = 沒申報 → 不上色(即使應稅有殘留值也不顯示)
                 const hasGeneralData = isIncludedInFiling && actualGeneralRent > 0;
                 const hasPublicData = isIncludedInFiling && actualPublicRent > 0;
-                const hasGeneralTaxableOnly = isIncludedInFiling && actualGeneralRent === 0 && actualGeneralTaxable > 0;
-                const hasAnyData = hasGeneralData || hasPublicData || hasGeneralTaxableOnly;
+                const hasAnyData = hasGeneralData || hasPublicData;
 
-                // === 報稅方式 — 必須「有實際申報資料」才顯示 ===
+                // === 報稅方式 — 必須「有實際申報租金 > 0」才顯示 ===
                 let filingType, filingChip;
                 if (!hasAnyData) {
-                  // 未勾選 / 勾了但沒任何金額 → 完全不顯示
                   filingType = null; filingChip = "";
-                } else if ((hasGeneralData || hasGeneralTaxableOnly) && hasPublicData) {
+                } else if (hasGeneralData && hasPublicData) {
                   filingType = "一般 + 公益"; filingChip = "chip-accent";
                 } else if (hasPublicData) {
                   filingType = "公益"; filingChip = "chip-green";
-                } else if (hasGeneralData || hasGeneralTaxableOnly) {
+                } else if (hasGeneralData) {
                   filingType = "一般"; filingChip = "chip-amber";
                 }
 
@@ -3492,6 +3490,36 @@ function PropertiesPage({ data, setData, year }) {
                             地價稅 {fmt(toNum(p.landTax))}
                           </div>
                         )}
+                        {/* 補繳歷史 — 從所有 filings 找 adjustments 中 adjPropertyId === p.id 的 */}
+                        {(() => {
+                          const supplementHistory = [];
+                          (data.filings || []).forEach(f => {
+                            (f.adjustments || []).forEach(adj => {
+                              if (adj.adjPropertyId === p.id && (adj.type === "supplement_rental" || adj.type === "supplement_income")) {
+                                supplementHistory.push({
+                                  year: f.year,
+                                  amount: toNum(adj.amount),
+                                  annualRent: toNum(adj.adjAnnualRent),
+                                  reason: adj.reason || "",
+                                });
+                              }
+                            });
+                          });
+                          if (supplementHistory.length === 0) return null;
+                          // 按年排序
+                          supplementHistory.sort((a, b) => b.year - a.year);
+                          return (
+                            <div className="mt-1 space-y-0.5">
+                              {supplementHistory.map((h, i) => (
+                                <div key={i} className="text-[10px] num" title={h.reason}
+                                  style={{ color: "var(--gold)", background: "#fef9ec", padding: "1px 4px", borderRadius: 2, display: "inline-block", marginRight: 2 }}>
+                                  ⚠ {h.year} 補繳 {fmt(h.amount)}
+                                  {h.annualRent > 0 && <span style={{ color: "var(--ink-mute)" }}> · 租金 {fmt(h.annualRent)}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-3 text-center align-top">
                         {filingChip ? (
@@ -3503,8 +3531,8 @@ function PropertiesPage({ data, setData, year }) {
                       <td className="px-3 py-3 align-top">
                         <YearContractsCell contracts={yearGenerals} chipClass="chip-amber" />
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: (hasGeneralData || hasGeneralTaxableOnly) ? "#fef9ec" : "transparent" }}>
-                        {(hasGeneralData || hasGeneralTaxableOnly) ? (
+                      <td className="px-3 py-3 align-top text-right" style={{ background: hasGeneralData ? "#fef9ec" : "transparent" }}>
+                        {hasGeneralData ? (
                           <>
                             <div className="num font-medium" style={{ color: "var(--accent-deep)", fontSize: "16px" }}>
                               {fmt(actualGeneralRent)}
@@ -7808,6 +7836,21 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                             })()}
                           </div>
                           <button
+                            className="btn-secondary text-[10px] px-3 py-1"
+                            disabled={!a.adjPropertyId || !a.adjAnnualRent || filing.settlementLocked}
+                            onClick={() => {
+                              if (filing.settlementLocked) {
+                                alert("⑦ 區已鎖定,請先解鎖。");
+                                return;
+                              }
+                              // 「只記錄」— 不動對照表,只更新 adjustment 本身的標籤
+                              alert("✓ 已記錄為「物件 " + ((properties || []).find(pp => pp.id === a.adjPropertyId)?.address || "?") + " · 整年租金 " + fmt(a.adjAnnualRent) + "」\n\n申報試算不變,物件清單和明年提醒會看到此筆補繳。");
+                            }}
+                            title="只記錄此筆補繳資訊 (推薦) — 不會改變申報試算金額"
+                          >
+                            📝 只記錄不套用
+                          </button>
+                          <button
                             className="btn-primary text-[10px] px-3 py-1"
                             disabled={!a.adjPropertyId || !a.adjAnnualRent || filing.settlementLocked}
                             onClick={() => {
@@ -7826,7 +7869,19 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                               const paramsLocal = TAX_PARAMS[yr];
                               if (!paramsLocal) return;
 
-                              // 從整年租金算應稅 (跟對照表 + 物件清單一致)
+                              // 確認警示
+                              if (!window.confirm(
+                                `⚠ 警告:套用會改變「申報試算」金額!\n\n` +
+                                `將寫入:${prop.address || prop.name}\n` +
+                                `  整年租金 ${fmt(annualVal)}\n` +
+                                `  類型 ${isPub ? "公益" : "一般"}\n\n` +
+                                `這會讓系統「申報試算」重新計算,不再等於你當初送件的金額。\n\n` +
+                                `適用情境:自首主動更正、重新申報\n` +
+                                `不適用:被國稅局追繳 (此情況建議用「只記錄」)\n\n` +
+                                `確定要套用嗎?`
+                              )) return;
+
+                              // 從整年租金算應稅
                               const comp = {
                                 type: isPub ? "public" : (isLand ? "land" : "general"),
                                 monthlyRent: 0, months: 12,
@@ -7836,27 +7891,21 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                               };
                               const taxableVal = computeRentalIncome([comp], paramsLocal).breakdown[0]?.taxableIncome || 0;
 
-                              // 1. 自動勾選計入此物件
                               const newOverrides = { ...(filing.manualRentOverrides || {}) };
                               const key = `${propId}_${yr}`;
                               const cur = newOverrides[key] || {};
                               newOverrides[key] = { ...cur, includeInFiling: true };
 
-                              // 2. 找該年度該物件的對應類型合約
-                              //   有 → 寫入合約 byContract[contractId] = annualVal,並覆寫 c_ key 應稅
-                              //   沒 → 用 totalAnnualRent + manualType (使用「沒合約手動補列」機制)
                               const newDtOv = { ...(filing.declaredTaxableOverrides || {}) };
                               const aggCheck = aggregateContractsForYear(contracts || [], propId, yr, newOverrides);
                               const matchedContract = aggCheck.contracts.find(c => c.months > 0 && (isPub ? c.isPublic : !c.isPublic));
                               if (matchedContract) {
-                                // 寫入合約級的整年租金 (byContract) + 應稅
                                 const byContract = { ...(newOverrides[key].byContract || {}) };
                                 byContract[matchedContract.contractId] = annualVal;
                                 newOverrides[key] = { ...newOverrides[key], byContract };
                                 const auditKey = `c_${matchedContract.contractId}_${yr}`;
                                 newDtOv[auditKey] = taxableVal;
                               } else {
-                                // 沒合約 → 用 totalAnnualRent + manualType
                                 newOverrides[key] = {
                                   ...newOverrides[key],
                                   totalAnnualRent: annualVal,
@@ -7869,11 +7918,11 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                                 manualRentOverrides: newOverrides,
                                 declaredTaxableOverrides: newDtOv,
                               });
-                              alert(`已套用!${prop.address || prop.name} → 整年租金 ${fmt(annualVal)}、應稅 ${fmt(taxableVal)} 已寫入。`);
+                              alert(`✓ 已套用!${prop.address || prop.name} → 整年租金 ${fmt(annualVal)}、應稅 ${fmt(taxableVal)} 已寫入。\n\n申報試算已自動重算。`);
                             }}
-                            title="自動勾選計入此物件 + 寫入整年租金 + 算應稅"
+                            title="改變對照表 + 重新計算申報試算 (適用主動更正重新申報)"
                           >
-                            ✓ 套用到對照表
+                            ⚠ 套用對照表
                           </button>
                         </div>
                       </div>
