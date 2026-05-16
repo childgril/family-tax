@@ -3327,10 +3327,19 @@ function PropertiesPage({ data, setData, year }) {
                 const owner = data.members.find(m => m.id === p.ownerId);
                 const myContracts = (data.contracts || []).filter(c => c.propertyId === p.id);
 
-                // 計算當年度公益月份覆蓋情形
-                const agg = aggregateContractsForYear(data.contracts || [], p.id, year, {});
+                // 先找該年度該屋主的 filing,拿 manualRentOverrides
+                const filingThisYear = (data.filings || []).find(f =>
+                  f.year === year &&
+                  (f.taxpayerId === p.ownerId || f.spouseId === p.ownerId || (f.dependentIds || []).includes(p.ownerId))
+                );
+                const filingOverrides = filingThisYear?.manualRentOverrides || {};
+                const overrideKey = `${p.id}_${year}`;
+                const propOverride = filingOverrides[overrideKey] || {};
 
-                // 該年度有效的合約 (有月份涵蓋)
+                // 計算當年度公益月份覆蓋情形 — 帶入 filing 的 manualRentOverrides 以反映手動調整
+                const agg = aggregateContractsForYear(data.contracts || [], p.id, year, filingOverrides);
+
+                // 該年度有效的合約 (有月份涵蓋) — 用 appliedRent 排除手動 0 的
                 const yearGenerals = agg.contracts.filter(c => !c.isPublic && c.months > 0)
                   .sort((a, b) => String(a.period).localeCompare(String(b.period)));
                 const yearPublics = agg.contracts.filter(c => c.isPublic && c.months > 0)
@@ -3385,18 +3394,10 @@ function PropertiesPage({ data, setData, year }) {
                   : (hasActiveThisYear ? "#fef9ec" : "white");
 
                 // === 串接「實際申報」金額 ===
-                // 找出該年度 + 該屋主的 filing,讀其 declaredTaxableOverrides 和 includeInFiling
-                const filingThisYear = (data.filings || []).find(f =>
-                  f.year === year &&
-                  (f.taxpayerId === p.ownerId || f.spouseId === p.ownerId || (f.dependentIds || []).includes(p.ownerId))
-                );
                 let actualGeneralRent = 0, actualGeneralTaxable = 0;
                 let actualPublicRent = 0, actualPublicTaxable = 0;
-                let isIncludedInFiling = false;
+                const isIncludedInFiling = propOverride.includeInFiling === true;
                 if (filingThisYear && params) {
-                  const overrideKey = `${p.id}_${year}`;
-                  const propOverride = (filingThisYear.manualRentOverrides || {})[overrideKey] || {};
-                  isIncludedInFiling = propOverride.includeInFiling === true;
                   const dtOv = filingThisYear.declaredTaxableOverrides || {};
 
                   // helper:用 taxable 算式 (跟對照表一致)
@@ -3413,9 +3414,11 @@ function PropertiesPage({ data, setData, year }) {
                   };
 
                   if (isIncludedInFiling) {
-                    // 跑所有合約
+                    // 1. 跑所有合約 (appliedRent 已含手動調整)
                     agg.contracts.filter(c => c.months > 0).forEach(c => {
                       const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                      // 若合約被排除 / 手動設 0 → 跳過
+                      if (appliedAnnual <= 0) return;
                       const auditKey = `c_${c.contractId}_${year}`;
                       const ovTaxable = dtOv[auditKey];
                       const taxable = (ovTaxable !== undefined && ovTaxable !== null && ovTaxable !== "")
@@ -3429,8 +3432,24 @@ function PropertiesPage({ data, setData, year }) {
                         actualGeneralTaxable += taxable;
                       }
                     });
-                    // 沒合約物件的 n_ override
-                    if (agg.contracts.length === 0) {
+
+                    // 2. 無合約手動補列 (像延平街 124 號的「手動補列當年度租金 36,000」)
+                    //    propOverride.totalAnnualRent 是使用者填的整年租金
+                    if (agg.contracts.length === 0 && propOverride.totalAnnualRent !== undefined && toNum(propOverride.totalAnnualRent) > 0) {
+                      const totalAnnual = toNum(propOverride.totalAnnualRent);
+                      const isPub = propOverride.manualType === "public";
+                      const taxable = calcTaxableFor(totalAnnual, isPub);
+                      if (isPub) {
+                        actualPublicRent += totalAnnual;
+                        actualPublicTaxable += taxable;
+                      } else {
+                        actualGeneralRent += totalAnnual;
+                        actualGeneralTaxable += taxable;
+                      }
+                    }
+
+                    // 3. 沒合約物件的 n_ override (使用者直接在對照表填的應稅,不透過 totalAnnualRent)
+                    if (agg.contracts.length === 0 && actualGeneralTaxable === 0 && actualPublicTaxable === 0) {
                       const nKey = `n_${p.id}_${year}`;
                       const ov = dtOv[nKey];
                       if (ov !== undefined && ov !== null && ov !== "") {
@@ -3439,11 +3458,13 @@ function PropertiesPage({ data, setData, year }) {
                     }
                   }
                 }
-                // 判斷此物件「在這年度實際參與了申報」(有合約 / 沒合約但有手動覆寫)
-                // 跟 isIncludedInFiling 不同:勾了計入但該年度沒合約也沒覆寫 → 不上色
-                const hasGeneralData = isIncludedInFiling && (yearGenerals.length > 0 || actualGeneralTaxable > 0);
-                const hasPublicData = isIncludedInFiling && (yearPublics.length > 0 || actualPublicTaxable > 0);
-                const hasAnyData = hasGeneralData || hasPublicData;
+                // 判斷此物件「在這年度實際參與了申報」(有合約 / 沒合約但有手動補列)
+                // 跟 isIncludedInFiling 不同:勾了計入但該年度沒合約也沒補列 → 不上色
+                const hasGeneralData = isIncludedInFiling && actualGeneralRent > 0;
+                const hasPublicData = isIncludedInFiling && actualPublicRent > 0;
+                // 「應稅 > 0 但租金 0」的情況 (n_ 對照表覆寫) 也算有資料
+                const hasGeneralTaxableOnly = isIncludedInFiling && actualGeneralRent === 0 && actualGeneralTaxable > 0;
+                const hasAnyData = hasGeneralData || hasPublicData || hasGeneralTaxableOnly;
 
                 return (
                   <React.Fragment key={p.id}>
@@ -3480,8 +3501,8 @@ function PropertiesPage({ data, setData, year }) {
                       <td className="px-3 py-3 align-top">
                         <YearContractsCell contracts={yearGenerals} chipClass="chip-amber" />
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: hasGeneralData ? "#fef9ec" : "transparent" }}>
-                        {hasGeneralData ? (
+                      <td className="px-3 py-3 align-top text-right" style={{ background: (hasGeneralData || hasGeneralTaxableOnly) ? "#fef9ec" : "transparent" }}>
+                        {(hasGeneralData || hasGeneralTaxableOnly) ? (
                           <>
                             <div className="num font-medium" style={{ color: "var(--accent-deep)", fontSize: "16px" }}>
                               {fmt(actualGeneralRent)}
@@ -3601,7 +3622,10 @@ function YearContractsCell({ contracts, chipClass, isPublic, hideTenant }) {
   return (
     <div className="space-y-1.5">
       {contracts.map(c => {
-        const annualRent = c.monthly * c.months;
+        // 用 appliedRent (考慮手動調整),沒有時用合約原算的 rent
+        const annualRent = c.appliedRent !== undefined ? c.appliedRent : (c.monthly * c.months);
+        const originalAnnual = c.monthly * c.months;
+        const isAdjusted = c.appliedRent !== undefined && c.appliedRent !== originalAnnual;
         return (
           <div key={c.contractId} className="text-sm">
             {/* 第一行: 合約人 + 合約日期 */}
@@ -3612,7 +3636,14 @@ function YearContractsCell({ contracts, chipClass, isPublic, hideTenant }) {
             {/* 第二行: 月租 + 整年租金 + 月數 */}
             <div className="flex items-center gap-2 flex-wrap mt-0.5">
               <span className="num text-sm">月租 <b>{fmt(c.monthly)}</b></span>
-              <span className="num text-sm" style={{ color: "var(--accent-deep)" }}>整年 <b>{fmt(annualRent)}</b></span>
+              <span className="num text-sm" style={{ color: "var(--accent-deep)" }}>
+                整年 <b>{fmt(annualRent)}</b>
+                {isAdjusted && (
+                  <span className="text-[10px] ml-1" style={{ color: "var(--gold)" }} title={`原 ${fmt(originalAnnual)},手動調整為 ${fmt(annualRent)}`}>
+                    ✎手調
+                  </span>
+                )}
+              </span>
               <span className={`chip ${chipClass} text-[10px] px-1 py-0`}>
                 {Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月
               </span>
