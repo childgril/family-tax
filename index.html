@@ -3448,32 +3448,24 @@ function PropertiesPage({ data, setData, year }) {
                     }
                   }
                 }
-                // 判斷此物件「在這年度實際參與了申報」(有合約 / 沒合約但有手動補列)
-                // 跟 isIncludedInFiling 不同:勾了計入但該年度沒合約也沒補列 → 不上色
+                // 是否「真的有實際申報資料」(勾選 + 有任何金額)
+                // 沒實際資料 → 全部欄位都不上色,不顯示報稅方式 (跟「未勾選」一樣處理)
                 const hasGeneralData = isIncludedInFiling && actualGeneralRent > 0;
                 const hasPublicData = isIncludedInFiling && actualPublicRent > 0;
-                // 「應稅 > 0 但租金 0」的情況 (n_ 對照表覆寫) 也算有資料
                 const hasGeneralTaxableOnly = isIncludedInFiling && actualGeneralRent === 0 && actualGeneralTaxable > 0;
                 const hasAnyData = hasGeneralData || hasPublicData || hasGeneralTaxableOnly;
 
-                // === 報稅方式 — 依「實際申報金額」判定,而非合約存在 ===
-                // 規則:
-                //   - 未勾選計入 → 無申報
-                //   - 一般 + 公益申報金額都 > 0 → 一般 + 公益
-                //   - 只有公益 > 0 → 公益
-                //   - 只有一般 > 0 → 一般
-                //   - 都是 0 (合約存在但都調整為 0,或未勾選) → 無申報
+                // === 報稅方式 — 必須「有實際申報資料」才顯示 ===
                 let filingType, filingChip;
-                if (!isIncludedInFiling) {
-                  filingType = "—"; filingChip = "";
+                if (!hasAnyData) {
+                  // 未勾選 / 勾了但沒任何金額 → 完全不顯示
+                  filingType = null; filingChip = "";
                 } else if ((hasGeneralData || hasGeneralTaxableOnly) && hasPublicData) {
                   filingType = "一般 + 公益"; filingChip = "chip-accent";
                 } else if (hasPublicData) {
                   filingType = "公益"; filingChip = "chip-green";
                 } else if (hasGeneralData || hasGeneralTaxableOnly) {
                   filingType = "一般"; filingChip = "chip-amber";
-                } else {
-                  filingType = "無申報"; filingChip = "";
                 }
 
                 return (
@@ -3504,8 +3496,6 @@ function PropertiesPage({ data, setData, year }) {
                       <td className="px-3 py-3 text-center align-top">
                         {filingChip ? (
                           <span className={`chip ${filingChip} text-xs`}>{filingType}</span>
-                        ) : filingType === "無申報" ? (
-                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>無申報</span>
                         ) : (
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
@@ -3523,12 +3513,8 @@ function PropertiesPage({ data, setData, year }) {
                               應稅 {fmt(actualGeneralTaxable)}
                             </div>
                           </>
-                        ) : isIncludedInFiling ? (
-                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>—</span>
                         ) : (
-                          <span className="text-xs" style={{ color: "var(--ink-mute)" }}>
-                            未勾選計入
-                          </span>
+                          <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
                       <td className="px-3 py-3 align-top">
@@ -7973,14 +7959,12 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
             <div className="text-xs font-medium mb-2" style={{ color: "var(--accent-deep)" }}>📊 本年度總實際稅務變動</div>
             <table className="w-full text-xs num">
               <tbody>
-                <tr><td className="py-0.5">系統試算</td>
-                    <td className="text-right">{sysFinal >= 0 ? `補繳 ${fmt(sysFinal)}` : `退稅 ${fmt(-sysFinal)}`}</td></tr>
                 {hasActual && (
                   <tr><td className="py-0.5">實際結算</td>
                       <td className="text-right">{actualNum >= 0 ? `補繳 ${fmt(actualNum)}` : `退稅 ${fmt(-actualNum)}`}</td></tr>
                 )}
                 {adjustments.length > 0 && (
-                  <tr><td className="py-0.5">後續調整合計</td>
+                  <tr><td className="py-0.5">後續調整合計 <span className="text-[10px]" style={{ color: "var(--ink-mute)" }}>({adjustments.length} 筆)</span></td>
                       <td className="text-right">{adjTotal >= 0 ? `再繳 ${fmt(adjTotal)}` : `再收 ${fmt(-adjTotal)}`}</td></tr>
                 )}
                 <tr className="font-medium" style={{ borderTop: "1px solid var(--line)" }}>
