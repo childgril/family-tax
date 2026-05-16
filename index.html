@@ -32,7 +32,8 @@
     --red-soft: #f0d4ce;
     --gold: #c89938;
   }
-  html, body { background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', -apple-system, BlinkMacSystemFont, sans-serif; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', -apple-system, BlinkMacSystemFont, sans-serif; font-size: 15px; }
+  /* Tailwind text-xs / text-sm 等基於 root font-size,所以 root 加大整體跟著變大 */
   .font-serif { font-family: 'Noto Serif TC', serif; }
   .font-mono { font-family: 'JetBrains Mono', monospace; }
   .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
@@ -2303,18 +2304,18 @@ function Dashboard({ data, year, setPage }) {
             以「實際結算金額 + 後續調整」累計;若未填實際金額則用系統試算
           </div>
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" style={{ maxHeight: "70vh", overflowY: "auto" }}>
           <table className="w-full text-sm">
-            <thead>
-              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
-                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)" }}>申報戶</th>
+            <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)", boxShadow: "0 2px 4px rgba(0,0,0,0.04)" }}>
+                <th className="text-left px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>申報戶</th>
                 {AVAILABLE_YEARS.map(y => (
-                  <th key={y} className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>
+                  <th key={y} className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px", background: "#fafaf6" }}>
                     {y} 年度
                   </th>
                 ))}
                 <th className="text-right px-5 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px", background: "#f5fbef" }}>累積補繳</th>
-                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px" }}>累積退稅</th>
+                <th className="text-right px-3 py-2 text-xs font-medium" style={{ color: "var(--ink-mute)", minWidth: "120px", background: "#fafaf6" }}>累積退稅</th>
               </tr>
             </thead>
             <tbody>
@@ -2481,17 +2482,17 @@ function Dashboard({ data, year, setPage }) {
           <div className="ornament">PART 3 · 歷年所得結構比較</div>
           <div className="font-serif text-base mt-1">📊 各年度各申報戶 所得 / 捐贈 / 租金 / 稅金</div>
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" style={{ maxHeight: "70vh", overflowY: "auto" }}>
           <table className="w-full text-xs">
-            <thead>
-              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
-                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>年度</th>
-                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>成員</th>
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>薪資</th>
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>利息</th>
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>股利</th>
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>租金所得</th>
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>其他</th>
+            <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)", boxShadow: "0 2px 4px rgba(0,0,0,0.04)" }}>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>年度</th>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>成員</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>薪資</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>利息</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>股利</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>租金所得</th>
+                <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fafaf6" }}>其他</th>
                 <th className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#fef9ec" }}>捐贈總額</th>
                 <th className="text-right px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", background: "#f5fbef" }}>應納稅額</th>
               </tr>
@@ -2542,14 +2543,14 @@ function Dashboard({ data, year, setPage }) {
             每位成員的歷年薪資 / 利息 / 股利 / 租金 / 其他 / 捐贈 / 應補繳。捐贈和應補繳僅歸到主納稅人。
           </div>
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" style={{ maxHeight: "70vh", overflowY: "auto" }}>
           <table className="w-full text-xs">
-            <thead>
-              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
-                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "70px" }}>成員</th>
-                <th className="text-left px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "70px" }}>項目</th>
+            <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)", boxShadow: "0 2px 4px rgba(0,0,0,0.04)" }}>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "70px", background: "#fafaf6" }}>成員</th>
+                <th className="text-left px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "70px", background: "#fafaf6" }}>項目</th>
                 {AVAILABLE_YEARS.map(y => (
-                  <th key={y} className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>
+                  <th key={y} className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px", background: "#fafaf6" }}>
                     {y}
                   </th>
                 ))}
@@ -2605,22 +2606,34 @@ function Dashboard({ data, year, setPage }) {
 
       {/* ============ 第五部分:租賃合約年度比較 ============ */}
       <div className="card mb-6">
-        <div className="px-5 py-3" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
-          <div className="ornament">PART 5 · 租賃合約歷年比較</div>
-          <div className="font-serif text-base mt-1">🏠 各物件歷年申報租金</div>
-          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
-            勾選「計入」才會列入該年度報稅;括弧顯示合約類型 + 月數
+        <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)", background: "#fafaf6" }}>
+          <div>
+            <div className="ornament">PART 5 · 租賃合約歷年比較</div>
+            <div className="font-serif text-base mt-1">🏠 各物件歷年申報租金</div>
+            <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-mute)" }}>
+              勾選「計入」才會列入該年度報稅;括弧顯示合約類型 + 月數
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px]" style={{ color: "var(--accent-deep)" }}>※ 金額為整年租金總額</div>
+            <div className="text-[9px]" style={{ color: "var(--ink-mute)" }}>(計入金額 × 整年月數)</div>
           </div>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)" }}>
-                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>屋主</th>
-                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)" }}>物件</th>
-                {AVAILABLE_YEARS.map(y => (
-                  <th key={y} className="text-right px-2 py-2 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>
-                    {y} 年度
+        <div className="overflow-x-auto" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+          <table className="w-full text-xs" style={{ borderCollapse: "collapse" }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
+              <tr style={{ background: "#fafaf6", borderBottom: "2px solid var(--ink-soft)", boxShadow: "0 2px 4px rgba(0,0,0,0.04)" }}>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", borderRight: "1px solid var(--line)", background: "#fafaf6" }}>屋主</th>
+                <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--ink-mute)", borderRight: "1px solid var(--line)", background: "#fafaf6" }}>物件</th>
+                {AVAILABLE_YEARS.map((y, i) => (
+                  <th key={y} className="text-right px-2 py-2 font-medium" style={{
+                    color: "var(--ink-mute)",
+                    minWidth: "110px",
+                    borderRight: i < AVAILABLE_YEARS.length - 1 ? "1px solid var(--line)" : "none",
+                    background: "#fafaf6",
+                  }}>
+                    <div>{y} 年度</div>
+                    <div className="text-[8px] font-normal" style={{ color: "var(--ink-mute)" }}>整年租金</div>
                   </th>
                 ))}
               </tr>
@@ -2630,20 +2643,21 @@ function Dashboard({ data, year, setPage }) {
                 <tr><td colSpan={AVAILABLE_YEARS.length + 2} className="text-center py-6 text-xs" style={{ color: "var(--ink-mute)" }}>尚無租賃物件</td></tr>
               ) : rentalCompareRows.map(({ property, owner, byYear }) => (
                 <tr key={property.id} style={{ borderBottom: "1px solid var(--line-soft)" }}>
-                  <td className="px-3 py-2 text-[11px]">{owner?.name || "—"}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 text-[11px]" style={{ borderRight: "1px solid var(--line-soft)" }}>{owner?.name || "—"}</td>
+                  <td className="px-3 py-2" style={{ borderRight: "1px solid var(--line-soft)" }}>
                     <div className="text-[11px]">{property.address || property.name}</div>
                     {property.assetType === "land" && (
                       <span className="text-[9px]" style={{ color: "var(--gold)" }}>🌳 土地</span>
                     )}
                   </td>
-                  {AVAILABLE_YEARS.map(y => {
+                  {AVAILABLE_YEARS.map((y, i) => {
                     const d = byYear[y];
+                    const cellBorder = i < AVAILABLE_YEARS.length - 1 ? "1px solid var(--line-soft)" : "none";
                     if (!d || d.contractsCount === 0) {
-                      return <td key={y} className="text-right px-2 py-2 text-xs" style={{ color: "var(--ink-mute)" }}>—</td>;
+                      return <td key={y} className="text-right px-2 py-2 text-xs" style={{ color: "var(--ink-mute)", borderRight: cellBorder }}>—</td>;
                     }
                     return (
-                      <td key={y} className="text-right px-2 py-2">
+                      <td key={y} className="text-right px-2 py-2" style={{ borderRight: cellBorder }}>
                         <div className="num font-medium" style={{
                           color: d.included ? "var(--accent-deep)" : "var(--ink-mute)",
                           textDecoration: d.included ? "none" : "line-through",
