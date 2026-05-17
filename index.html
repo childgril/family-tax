@@ -4994,6 +4994,56 @@ function FilingPage({ data, setData, year, setPage }) {
     setSelectedId(newFiling.id);
   };
 
+  // 複製當前申報戶為「補繳版」
+  const duplicateAsSupplement = (sourceFiling) => {
+    if (!sourceFiling) return;
+    if (sourceFiling.supplementOfId) {
+      alert("此申報戶已經是補繳版,不能再複製為補繳版。\n如需修改,請直接編輯本版本。");
+      return;
+    }
+    // 找出現有的補繳版,序號 +1
+    const existingSupplements = data.filings.filter(f => f.supplementOfId === sourceFiling.id);
+    const supplementIndex = existingSupplements.length + 1;
+
+    if (!window.confirm(
+      `建立「${sourceFiling.name}」的補繳版?\n\n` +
+      `將完整複製當前資料,你可以在新版本修改:\n` +
+      `  • 租賃紀錄 (② 區)\n` +
+      `  • 所得明細 (① 區)\n` +
+      `  • 扣除額、抵減等任何欄位\n\n` +
+      `修改後系統會自動跟原版比對,顯示差異。\n` +
+      `原版「${sourceFiling.name}」永遠保持不變。\n\n` +
+      `${existingSupplements.length > 0 ? `(目前已有 ${existingSupplements.length} 個補繳版,新版本將為「補繳版 ${supplementIndex}」)\n\n` : ""}` +
+      `確定建立?`
+    )) return;
+
+    const newName = supplementIndex === 1
+      ? `${sourceFiling.name} (補繳)`
+      : `${sourceFiling.name} (補繳 ${supplementIndex})`;
+
+    const newFiling = {
+      ...JSON.parse(JSON.stringify(sourceFiling)),  // deep clone
+      id: uid(),
+      name: newName,
+      supplementOfId: sourceFiling.id,
+      supplementCreatedAt: new Date().toISOString(),
+      supplementIndex,
+      // 補繳版預設不鎖,讓使用者可改
+      locked: false,
+      settlementLocked: false,
+      // 清空原版的 adjustments / actualSettlement (補繳版要重新記錄)
+      adjustments: [],
+      actualSettlement: { actualAmount: "", actualDate: "", note: "" },
+      // 清空 carriedAdjustmentsHint (補繳版不需要去年提醒,因為它是針對特定年的修正)
+      carriedAdjustmentsHint: [],
+    };
+    setData({ ...data, filings: [...data.filings, newFiling] });
+    setSelectedId(newFiling.id);
+    setTimeout(() => {
+      alert(`✓ 已建立補繳版「${newName}」\n\n你可以直接修改任何欄位,系統會自動跟原版比對。`);
+    }, 100);
+  };
+
   return (
     <div className="fade-in">
       <PageHeader
@@ -5040,6 +5090,7 @@ function FilingPage({ data, setData, year, setPage }) {
                       <>
                         <div className="text-sm font-medium truncate flex items-center gap-1">
                           {f.locked && <span style={{ color: "var(--gold)" }}>🔒</span>}
+                          {f.supplementOfId && <span className="chip chip-amber text-[9px] px-1 py-0">⚠ 補繳</span>}
                           {displayName}
                         </div>
                         {f.name && f.name !== displayName && (
@@ -5126,6 +5177,9 @@ function FilingPage({ data, setData, year, setPage }) {
               year={year}
               onChange={updateFiling}
               onDelete={() => deleteFiling(selected.id)}
+              onDuplicateAsSupplement={() => duplicateAsSupplement(selected)}
+              allFilings={data.filings || []}
+              onSwitchFiling={(id) => setSelectedId(id)}
             />
           )}
         </div>
@@ -5134,7 +5188,7 @@ function FilingPage({ data, setData, year, setPage }) {
   );
 }
 
-function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, allFilings, payerDirectory, savePayer, year, onChange: rawOnChange, onDelete }) {
+function FilingDetail({ filing, members, properties, setProperties, rentalRecords, setRentalRecords, contracts, setContracts, allFilings, payerDirectory, savePayer, year, onChange: rawOnChange, onDelete, onDuplicateAsSupplement, onSwitchFiling }) {
   // 鎖定機制 — 兩段式:
   //   filing.locked = 鎖前 6 個區塊 + 申報書 (避免誤改「第一次申報」資料)
   //   filing.settlementLocked = 額外鎖 ⑦ 實際結算與補繳通知 (補繳完成後也封存)
@@ -5344,6 +5398,38 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
   return (
     <div className="space-y-5">
+      {/* === 補繳版橫幅 === */}
+      {filing.supplementOfId && (() => {
+        const original = (allFilings || []).find(f => f.id === filing.supplementOfId);
+        return (
+          <div className="p-4 rounded" style={{ background: "#fef9ec", border: "2px solid var(--gold)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium" style={{ color: "var(--gold)" }}>
+                  ⚠ 此為 {filing.year} 年補繳版{filing.supplementIndex > 1 ? ` (第 ${filing.supplementIndex} 次)` : ""}
+                </div>
+                <div className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                  建立於 {filing.supplementCreatedAt ? new Date(filing.supplementCreatedAt).toLocaleString("zh-TW") : "—"}
+                  {original && <span> · 原版:{original.name}</span>}
+                </div>
+                <div className="text-[10px] mt-1" style={{ color: "var(--ink-mute)" }}>
+                  在這裡修改的數字會跟原版比對 · 差異會在申報書頁面標亮 · 原版永遠保持不變
+                </div>
+              </div>
+              {original && onSwitchFiling && (
+                <button
+                  className="btn-secondary text-xs"
+                  onClick={() => onSwitchFiling(original.id)}
+                  title={`切換到原版「${original.name}」`}
+                >
+                  ← 看原版
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 標題列 */}
       <div className="card p-5" style={{
         background: filing.locked ? "#f5f3ec" : "white",
@@ -5367,6 +5453,17 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
             readOnly={filing.locked}
             onChange={e => filing.locked ? null : rawOnChange({ ...filing, name: e.target.value })}
           />
+          {/* 複製為補繳版 — 只在原版且鎖定後出現 */}
+          {!filing.supplementOfId && filing.locked && onDuplicateAsSupplement && (
+            <button
+              className="btn-secondary text-sm"
+              onClick={onDuplicateAsSupplement}
+              title="完整複製此申報戶為「補繳版」,可以修改任何欄位,原版不會被動到"
+              style={{ borderColor: "var(--gold)", color: "var(--gold)" }}
+            >
+              🔄 複製為補繳版
+            </button>
+          )}
           <button
             className="text-sm px-3 py-2 rounded"
             style={{
@@ -7070,7 +7167,13 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
 
 
       {/* 結算申報書 (試算結果) */}
-      <OfficialFormView result={result} year={year} filing={filing} onChange={onChange} />
+      <OfficialFormView result={result} year={year} filing={filing} onChange={onChange}
+        originalResult={filing.supplementOfId ? (() => {
+          const orig = (allFilings || []).find(f => f.id === filing.supplementOfId);
+          if (!orig) return null;
+          return computeFilingWithData(orig, { members, properties, contracts, filings: allFilings, rentalRecords: rentalRecords || [], payerDirectory: payerDirectory || {} }, year);
+        })() : null}
+      />
 
       {/* ⑤ 實際結算與後續調整 */}
       <SettlementPanel
@@ -7760,7 +7863,7 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                     {a.type === "supplement_rental" && (
                       <div className="p-3 rounded mb-2" style={{ background: "white", border: "1px dashed var(--gold)" }}>
                         <div className="text-[10px] mb-2" style={{ color: "var(--gold)" }}>
-                          📋 補列租金 — 選物件 + 填應稅金額,點「套用」直接寫到 ② 對照表的「申報應稅」覆寫
+                          📋 補列租金 — 選物件 + 填整年租金,系統算應稅。記錄不會改變申報試算,只供日後參考
                         </div>
                         <div className="grid grid-cols-12 gap-2 items-center">
                           <div className="col-span-5 flex items-center gap-1">
@@ -7836,93 +7939,25 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                             })()}
                           </div>
                           <button
-                            className="btn-secondary text-[10px] px-3 py-1"
+                            className="btn-primary text-[10px] px-3 py-1"
                             disabled={!a.adjPropertyId || !a.adjAnnualRent || filing.settlementLocked}
                             onClick={() => {
                               if (filing.settlementLocked) {
                                 alert("⑦ 區已鎖定,請先解鎖。");
                                 return;
                               }
-                              // 「只記錄」— 不動對照表,只更新 adjustment 本身的標籤
-                              alert("✓ 已記錄為「物件 " + ((properties || []).find(pp => pp.id === a.adjPropertyId)?.address || "?") + " · 整年租金 " + fmt(a.adjAnnualRent) + "」\n\n申報試算不變,物件清單和明年提醒會看到此筆補繳。");
+                              const prop = (properties || []).find(pp => pp.id === a.adjPropertyId);
+                              alert(
+                                `✓ 已記錄補繳:${prop?.address || "?"}\n` +
+                                `  整年租金 ${fmt(a.adjAnnualRent)}\n` +
+                                `  補繳稅額 ${fmt(a.amount)}\n\n` +
+                                `📌 申報試算金額不變,物件清單會顯示此筆補繳。\n` +
+                                `📌 明年新申報戶會在頂端提醒這筆。`
+                              );
                             }}
-                            title="只記錄此筆補繳資訊 (推薦) — 不會改變申報試算金額"
+                            title="記錄此筆補繳資訊 — 不會改變申報試算金額"
                           >
-                            📝 只記錄不套用
-                          </button>
-                          <button
-                            className="btn-primary text-[10px] px-3 py-1"
-                            disabled={!a.adjPropertyId || !a.adjAnnualRent || filing.settlementLocked}
-                            onClick={() => {
-                              if (filing.settlementLocked) {
-                                alert("⑦ 區已鎖定,無法套用。請先解鎖。");
-                                return;
-                              }
-                              const propId = a.adjPropertyId;
-                              const annualVal = toNum(a.adjAnnualRent);
-                              const yr = filing.year;
-                              if (!propId || !annualVal) return;
-                              const prop = (properties || []).find(pp => pp.id === propId);
-                              if (!prop) return;
-                              const isPub = a.adjRentalType === "public";
-                              const isLand = prop.assetType === "land";
-                              const paramsLocal = TAX_PARAMS[yr];
-                              if (!paramsLocal) return;
-
-                              // 確認警示
-                              if (!window.confirm(
-                                `⚠ 警告:套用會改變「申報試算」金額!\n\n` +
-                                `將寫入:${prop.address || prop.name}\n` +
-                                `  整年租金 ${fmt(annualVal)}\n` +
-                                `  類型 ${isPub ? "公益" : "一般"}\n\n` +
-                                `這會讓系統「申報試算」重新計算,不再等於你當初送件的金額。\n\n` +
-                                `適用情境:自首主動更正、重新申報\n` +
-                                `不適用:被國稅局追繳 (此情況建議用「只記錄」)\n\n` +
-                                `確定要套用嗎?`
-                              )) return;
-
-                              // 從整年租金算應稅
-                              const comp = {
-                                type: isPub ? "public" : (isLand ? "land" : "general"),
-                                monthlyRent: 0, months: 12,
-                                annualRentDirect: annualVal,
-                                landTax: toNum(prop.landTax || 0),
-                                expenseRatio: 0.43,
-                              };
-                              const taxableVal = computeRentalIncome([comp], paramsLocal).breakdown[0]?.taxableIncome || 0;
-
-                              const newOverrides = { ...(filing.manualRentOverrides || {}) };
-                              const key = `${propId}_${yr}`;
-                              const cur = newOverrides[key] || {};
-                              newOverrides[key] = { ...cur, includeInFiling: true };
-
-                              const newDtOv = { ...(filing.declaredTaxableOverrides || {}) };
-                              const aggCheck = aggregateContractsForYear(contracts || [], propId, yr, newOverrides);
-                              const matchedContract = aggCheck.contracts.find(c => c.months > 0 && (isPub ? c.isPublic : !c.isPublic));
-                              if (matchedContract) {
-                                const byContract = { ...(newOverrides[key].byContract || {}) };
-                                byContract[matchedContract.contractId] = annualVal;
-                                newOverrides[key] = { ...newOverrides[key], byContract };
-                                const auditKey = `c_${matchedContract.contractId}_${yr}`;
-                                newDtOv[auditKey] = taxableVal;
-                              } else {
-                                newOverrides[key] = {
-                                  ...newOverrides[key],
-                                  totalAnnualRent: annualVal,
-                                  manualType: isPub ? "public" : "general",
-                                };
-                              }
-
-                              (rawOnChange || onChange)({
-                                ...filing,
-                                manualRentOverrides: newOverrides,
-                                declaredTaxableOverrides: newDtOv,
-                              });
-                              alert(`✓ 已套用!${prop.address || prop.name} → 整年租金 ${fmt(annualVal)}、應稅 ${fmt(taxableVal)} 已寫入。\n\n申報試算已自動重算。`);
-                            }}
-                            title="改變對照表 + 重新計算申報試算 (適用主動更正重新申報)"
-                          >
-                            ⚠ 套用對照表
+                            📝 記錄補繳
                           </button>
                         </div>
                       </div>
@@ -8792,7 +8827,7 @@ function DeductionOverrideInput({ autoValue, overrideValue, currentValue, onChan
   );
 }
 
-function OfficialFormView({ result, year, filing, onChange }) {
+function OfficialFormView({ result, year, filing, onChange, originalResult }) {
   if (!result || !result.params) return null;
   // 拿關鍵數字 (全部加 || 0 防 undefined)
   // ⚠ 注意:官方申報書「綜合所得總額」是「薪資扣特扣後」,而系統內 grossIncome 是「未扣前」
@@ -8886,24 +8921,49 @@ function OfficialFormView({ result, year, filing, onChange }) {
                     {finalDue > 0 ? "應補繳稅額" : finalDue < 0 ? "可退稅金額" : "剛好平衡"} (新臺幣 元)
                   </div>
                 </div>
-                {/* 副框: 政府追繳 */}
-                {hasSupplement && (
-                  <div className="text-center p-3" style={{
-                    background: supplementTotal > 0 ? "#b8772d" : "#5c7048",
-                    color: "white",
-                    borderTop: "1px solid white",
-                  }}>
-                    <div style={{ color: "rgba(255,255,255,0.7)", letterSpacing: "0.28em", fontSize: "0.7rem", fontWeight: 500 }}>
-                      GOV ADJUST · 政府追繳/退補
+                {/* 副框: 補繳版顯示「跟原版差」 | 一般版顯示「政府追繳」 */}
+                {filing.supplementOfId && originalResult ? (
+                  (() => {
+                    const diff = finalDue - (originalResult.finalDue || 0);
+                    if (diff === 0) return null;
+                    return (
+                      <div className="text-center p-3" style={{
+                        background: diff > 0 ? "#b8772d" : "#5c7048",
+                        color: "white",
+                        borderTop: "1px solid white",
+                      }}>
+                        <div style={{ color: "rgba(255,255,255,0.7)", letterSpacing: "0.28em", fontSize: "0.7rem", fontWeight: 500 }}>
+                          DIFF · 跟原版差異
+                        </div>
+                        <div className="font-serif num mt-0.5" style={{ fontSize: "28px", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+                          {diff >= 0 ? "+" : "−"}{fmt(Math.abs(diff))}
+                        </div>
+                        <div className="text-[10px] mt-0.5" style={{ color: "rgba(255,255,255,0.7)" }}>
+                          原版 {fmt(Math.abs(originalResult.finalDue))} → 此版 {fmt(Math.abs(finalDue))}
+                          <span className="ml-2">{diff > 0 ? "⚠ 需多補繳" : "✓ 可退稅"}</span>
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  hasSupplement && (
+                    <div className="text-center p-3" style={{
+                      background: supplementTotal > 0 ? "#b8772d" : "#5c7048",
+                      color: "white",
+                      borderTop: "1px solid white",
+                    }}>
+                      <div style={{ color: "rgba(255,255,255,0.7)", letterSpacing: "0.28em", fontSize: "0.7rem", fontWeight: 500 }}>
+                        GOV ADJUST · 政府追繳/退補
+                      </div>
+                      <div className="font-serif num mt-0.5" style={{ fontSize: "28px", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+                        {supplementTotal >= 0 ? "+" : "−"}{fmt(Math.abs(supplementTotal))}
+                      </div>
+                      <div className="text-[10px] mt-0.5" style={{ color: "rgba(255,255,255,0.7)" }}>
+                        {supplementTotal > 0 ? `補繳 (${adjustments.length} 筆)` : supplementTotal < 0 ? "淨退稅" : "持平"}
+                        <span className="ml-2">⚠ 此金額不併入「申報試算」</span>
+                      </div>
                     </div>
-                    <div className="font-serif num mt-0.5" style={{ fontSize: "28px", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
-                      {supplementTotal >= 0 ? "+" : "−"}{fmt(Math.abs(supplementTotal))}
-                    </div>
-                    <div className="text-[10px] mt-0.5" style={{ color: "rgba(255,255,255,0.7)" }}>
-                      {supplementTotal > 0 ? `補繳 (${adjustments.length} 筆)` : supplementTotal < 0 ? "淨退稅" : "持平"}
-                      <span className="ml-2">⚠ 此金額不併入「申報試算」</span>
-                    </div>
-                  </div>
+                  )
                 )}
               </div>
             );
