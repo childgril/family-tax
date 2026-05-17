@@ -3384,15 +3384,26 @@ function PropertiesPage({ data, setData, year }) {
                   : (hasActiveThisYear ? "#fef9ec" : "white");
 
                 // === 串接「實際申報」金額 ===
+                // === 標色規則 (新版) ===
+                // 條件:
+                //   - 物件必須在 ② 區「勾選計入」(includeInFiling = true)
+                //   - 該物件至少要有一筆「該類型合約」存在(無論 appliedRent 是否 = 0)
+                //     → 手動調整為 0 也算「有申報該類型」,只是金額是 0
+                //   - 排除的合約 (excludedContracts) 視為沒選租客 → 該筆不算
+                //   - 公益合約獨立判斷;一般合約獨立判斷;互不影響
+
                 let actualGeneralRent = 0, actualGeneralTaxable = 0;
                 let actualPublicRent = 0, actualPublicTaxable = 0;
+                let hasGeneralContract = false;  // 該物件 + 該年有沒有「未被排除的一般合約」(無論金額)
+                let hasPublicContract = false;
                 const isIncludedInFiling = propOverride.includeInFiling === true;
-                if (filingThisYear && params) {
-                  const dtOv = filingThisYear.declaredTaxableOverrides || {};
 
-                  // helper:用 taxable 算式 (跟對照表一致)
+                if (filingThisYear && isIncludedInFiling && params) {
+                  const dtOv = filingThisYear.declaredTaxableOverrides || {};
+                  const excludedContracts = propOverride.excludedContracts || {};
+
                   const calcTaxableFor = (annualValue, isPub) => {
-                    if (!params) return 0;
+                    if (!params || annualValue <= 0) return 0;
                     const comp = {
                       type: isPub ? "public" : (p.assetType === "land" ? "land" : "general"),
                       monthlyRent: 0, months: 12,
@@ -3403,82 +3414,88 @@ function PropertiesPage({ data, setData, year }) {
                     return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
                   };
 
-                  if (isIncludedInFiling) {
-                    // 1. 跑所有合約 (appliedRent 已含手動調整)
-                    agg.contracts.filter(c => c.months > 0).forEach(c => {
-                      const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
-                      // 若合約被排除 / 手動設 0 → 跳過
-                      if (appliedAnnual <= 0) return;
-                      const auditKey = `c_${c.contractId}_${year}`;
-                      const ovTaxable = dtOv[auditKey];
-                      const taxable = (ovTaxable !== undefined && ovTaxable !== null && ovTaxable !== "")
-                        ? toNum(ovTaxable)
-                        : calcTaxableFor(appliedAnnual, c.isPublic);
-                      if (c.isPublic) {
-                        actualPublicRent += appliedAnnual;
-                        actualPublicTaxable += taxable;
-                      } else {
-                        actualGeneralRent += appliedAnnual;
-                        actualGeneralTaxable += taxable;
-                      }
-                    });
+                  // 跑所有合約 — 看「合約存在 + 沒被 excludedContracts 排除」
+                  agg.contracts.filter(c => c.months > 0).forEach(c => {
+                    // 該合約被使用者取消勾選 → 視為沒選租客,跳過
+                    if (excludedContracts[c.contractId]) return;
 
-                    // 2. 無合約手動補列 (像延平街 124 號的「手動補列當年度租金 36,000」)
-                    //    propOverride.totalAnnualRent 是使用者填的整年租金
-                    if (agg.contracts.length === 0 && propOverride.totalAnnualRent !== undefined && toNum(propOverride.totalAnnualRent) > 0) {
-                      const totalAnnual = toNum(propOverride.totalAnnualRent);
-                      const isPub = propOverride.manualType === "public";
-                      const taxable = calcTaxableFor(totalAnnual, isPub);
-                      if (isPub) {
-                        actualPublicRent += totalAnnual;
-                        actualPublicTaxable += taxable;
-                      } else {
-                        actualGeneralRent += totalAnnual;
-                        actualGeneralTaxable += taxable;
-                      }
+                    // 標記該類型「有申報」(即使 appliedRent = 0)
+                    if (c.isPublic) hasPublicContract = true;
+                    else hasGeneralContract = true;
+
+                    const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                    const auditKey = `c_${c.contractId}_${year}`;
+                    const ovTaxable = dtOv[auditKey];
+                    const taxable = (ovTaxable !== undefined && ovTaxable !== null && ovTaxable !== "")
+                      ? toNum(ovTaxable)
+                      : calcTaxableFor(appliedAnnual, c.isPublic);
+                    if (c.isPublic) {
+                      actualPublicRent += appliedAnnual;
+                      actualPublicTaxable += taxable;
+                    } else {
+                      actualGeneralRent += appliedAnnual;
+                      actualGeneralTaxable += taxable;
                     }
+                  });
 
-                    // 3. 沒合約物件的 n_ override (使用者直接在對照表填的應稅,不透過 totalAnnualRent)
-                    if (agg.contracts.length === 0 && actualGeneralTaxable === 0 && actualPublicTaxable === 0) {
-                      const nKey = `n_${p.id}_${year}`;
-                      const ov = dtOv[nKey];
-                      if (ov !== undefined && ov !== null && ov !== "") {
-                        actualGeneralTaxable += toNum(ov);
-                      }
+                  // 無合約手動補列
+                  if (agg.contracts.length === 0 && propOverride.totalAnnualRent !== undefined && toNum(propOverride.totalAnnualRent) > 0) {
+                    const totalAnnual = toNum(propOverride.totalAnnualRent);
+                    const isPub = propOverride.manualType === "public";
+                    const taxable = calcTaxableFor(totalAnnual, isPub);
+                    if (isPub) {
+                      actualPublicRent += totalAnnual;
+                      actualPublicTaxable += taxable;
+                      hasPublicContract = true;
+                    } else {
+                      actualGeneralRent += totalAnnual;
+                      actualGeneralTaxable += taxable;
+                      hasGeneralContract = true;
                     }
                   }
                 }
-                // 只看「實際申報租金 > 0」才算有資料、才上色
-                // 租金 0 = 沒申報 → 不上色(即使應稅有殘留值也不顯示)
-                const hasGeneralData = isIncludedInFiling && actualGeneralRent > 0;
-                const hasPublicData = isIncludedInFiling && actualPublicRent > 0;
-                const hasAnyData = hasGeneralData || hasPublicData;
 
-                // === 報稅方式 — 必須「有實際申報租金 > 0」才顯示 ===
-                let filingType, filingChip;
+                // 標色判定 — 看「該類型有沒有未被排除的合約」(即使金額是 0)
+                const hasGeneralData = hasGeneralContract;
+                const hasPublicData = hasPublicContract;
+                const hasAnyData = hasGeneralData || hasPublicData;
+                const hasBoth = hasGeneralData && hasPublicData;
+
+                // === 報稅方式 (右側 chip) — 一般+公益分開兩個 chip ===
+                let filingType, filingChip, extraChip;
                 if (!hasAnyData) {
-                  filingType = null; filingChip = "";
-                } else if (hasGeneralData && hasPublicData) {
-                  filingType = "一般 + 公益"; filingChip = "chip-accent";
-                } else if (hasPublicData) {
-                  filingType = "公益"; filingChip = "chip-green";
-                } else if (hasGeneralData) {
+                  filingType = null; filingChip = ""; extraChip = null;
+                } else if (hasBoth) {
+                  // 兩種都有 → 顯示兩個 chip
                   filingType = "一般"; filingChip = "chip-amber";
+                  extraChip = { type: "公益", chip: "chip-green" };
+                } else if (hasPublicData) {
+                  filingType = "公益"; filingChip = "chip-green"; extraChip = null;
+                } else {
+                  filingType = "一般"; filingChip = "chip-amber"; extraChip = null;
                 }
+
+                // === 序號/屋主/物件 左 3 格背景色 ===
+                // 兩種都有時 → 不上色(讓兩邊的色塊自己說話),否則用對應淡色
+                let leadBg;
+                if (!hasAnyData) leadBg = "transparent";
+                else if (hasBoth) leadBg = "transparent";  // 兩種都有 → 不上色 (左邊黃右邊綠已經夠)
+                else if (hasPublicData) leadBg = "#eef7e9";
+                else leadBg = "#fef9ec";
 
                 return (
                   <React.Fragment key={p.id}>
                     <tr className="table-row cursor-pointer"
                       style={{ background: rowBg }}
                       onClick={() => setExpandedId(isExpanded ? null : p.id)}>
-                      <td className="px-3 py-3 align-top">
+                      <td className="px-3 py-3 align-top" style={{ background: leadBg }}>
                         <span className="chevron text-sm mr-1" style={{ color: "var(--ink-mute)" }}>
                           {isExpanded ? "▾" : "▸"}
                         </span>
                         <span className="num font-medium text-base">{p.serial || "—"}</span>
                       </td>
-                      <td className="px-3 py-3 text-sm font-medium align-top">{owner?.name || "—"}</td>
-                      <td className="px-3 py-3 align-top">
+                      <td className="px-3 py-3 text-sm font-medium align-top" style={{ background: leadBg }}>{owner?.name || "—"}</td>
+                      <td className="px-3 py-3 align-top" style={{ background: leadBg }}>
                         <div className="font-medium text-sm flex items-center gap-1">
                           {p.address || p.name || "(未命名)"}
                           {p.assetType === "land" && (
@@ -3523,12 +3540,17 @@ function PropertiesPage({ data, setData, year }) {
                       </td>
                       <td className="px-3 py-3 text-center align-top">
                         {filingChip ? (
-                          <span className={`chip ${filingChip} text-xs`}>{filingType}</span>
+                          <div className="flex flex-col gap-1 items-center">
+                            <span className={`chip ${filingChip} text-xs`}>{filingType}</span>
+                            {extraChip && (
+                              <span className={`chip ${extraChip.chip} text-xs`}>{extraChip.type}</span>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 align-top">
+                      <td className="px-3 py-3 align-top" style={{ background: hasGeneralData ? "#fef9ec" : "transparent" }}>
                         <YearContractsCell contracts={yearGenerals} chipClass="chip-amber" />
                       </td>
                       <td className="px-3 py-3 align-top text-right" style={{ background: hasGeneralData ? "#fef9ec" : "transparent" }}>
@@ -3545,7 +3567,7 @@ function PropertiesPage({ data, setData, year }) {
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 align-top">
+                      <td className="px-3 py-3 align-top" style={{ background: hasPublicData ? "#f5fbef" : "transparent" }}>
                         <YearContractsCell contracts={yearPublics} chipClass="chip-green" isPublic />
                       </td>
                       <td className="px-3 py-3 align-top text-right" style={{ background: hasPublicData ? "#f5fbef" : "transparent" }}>
