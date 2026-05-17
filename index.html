@@ -3466,12 +3466,11 @@ function PropertiesPage({ data, setData, year }) {
                 const hasAnyData = hasGeneralData || hasPublicData;
                 const hasBoth = hasGeneralData && hasPublicData;
 
-                // === 報稅方式 (右側 chip) — 一般+公益分開兩個 chip ===
+                // === 報稅方式 (chip 仍保留) ===
                 let filingType, filingChip, extraChip;
                 if (!hasAnyData) {
                   filingType = null; filingChip = ""; extraChip = null;
                 } else if (hasBoth) {
-                  // 兩種都有 → 顯示兩個 chip
                   filingType = "一般"; filingChip = "chip-amber";
                   extraChip = { type: "公益", chip: "chip-green" };
                 } else if (hasPublicData) {
@@ -3480,13 +3479,8 @@ function PropertiesPage({ data, setData, year }) {
                   filingType = "一般"; filingChip = "chip-amber"; extraChip = null;
                 }
 
-                // === 序號/屋主/物件 左 3 格背景色 ===
-                // 兩種都有時 → 不上色(讓兩邊的色塊自己說話),否則用對應淡色
-                let leadBg;
-                if (!hasAnyData) leadBg = "transparent";
-                else if (hasBoth) leadBg = "transparent";  // 兩種都有 → 不上色 (左邊黃右邊綠已經夠)
-                else if (hasPublicData) leadBg = "#eef7e9";
-                else leadBg = "#fef9ec";
+                // === 不再標色 ===
+                const leadBg = "transparent";
 
                 return (
                   <React.Fragment key={p.id}>
@@ -3555,10 +3549,10 @@ function PropertiesPage({ data, setData, year }) {
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 align-top" style={{ background: hasGeneralData ? "#fef9ec" : "transparent" }}>
+                      <td className="px-3 py-3 align-top">
                         <YearContractsCell contracts={yearGenerals} chipClass="chip-amber" />
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: hasGeneralData ? "#fef9ec" : "transparent" }}>
+                      <td className="px-3 py-3 align-top text-right">
                         {hasGeneralData ? (
                           <>
                             <div className="num font-medium" style={{ color: "var(--accent-deep)", fontSize: "16px" }}>
@@ -3572,10 +3566,10 @@ function PropertiesPage({ data, setData, year }) {
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 align-top" style={{ background: hasPublicData ? "#f5fbef" : "transparent" }}>
+                      <td className="px-3 py-3 align-top">
                         <YearContractsCell contracts={yearPublics} chipClass="chip-green" isPublic />
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: hasPublicData ? "#f5fbef" : "transparent" }}>
+                      <td className="px-3 py-3 align-top text-right">
                         {hasPublicData ? (
                           <>
                             <div className="num font-medium" style={{ color: "var(--green)", fontSize: "16px" }}>
@@ -3589,7 +3583,7 @@ function PropertiesPage({ data, setData, year }) {
                           <span className="text-sm" style={{ color: "var(--ink-mute)" }}>—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 align-top text-right" style={{ background: hasAnyData ? "#fef5e8" : "transparent" }}>
+                      <td className="px-3 py-3 align-top text-right">
                         {hasAnyData ? (
                           <>
                             <div className="num font-bold" style={{ color: "var(--accent-deep)", fontSize: "18px" }}>
@@ -5258,7 +5252,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
     (taxpayerObj && /^\d+年-/.test(filing.name) && filing.name !== expectedName)
   );
   React.useEffect(() => {
-    if (filing.locked) return;
+    // 名字格式自動遷移 (純 UI 顯示,不影響稅務計算,鎖定也允許)
     if (isOldAutoName && filing.name !== expectedName) {
       rawOnChange({ ...filing, name: expectedName });
     }
