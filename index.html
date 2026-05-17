@@ -3313,14 +3313,14 @@ function PropertiesPage({ data, setData, year }) {
                 <th className="text-left px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)" }}>物件 / 地址</th>
                 <th className="text-center px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)" }}>報稅方式</th>
                 <th className="text-left px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "180px" }}>{year} 一般合約</th>
-                <th className="text-right px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "130px", background: "#fef9ec" }}>
+                <th className="text-right px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "130px" }}>
                   一般申報租金<div className="text-[10px] font-normal" style={{ color: "var(--ink-mute)" }}>(應稅)</div>
                 </th>
                 <th className="text-left px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "180px" }}>{year} 公益合約</th>
-                <th className="text-right px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "130px", background: "#f5fbef" }}>
+                <th className="text-right px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "130px" }}>
                   公益申報租金<div className="text-[10px] font-normal" style={{ color: "var(--ink-mute)" }}>(應稅)</div>
                 </th>
-                <th className="text-right px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "130px", background: "#fef5e8" }}>
+                <th className="text-right px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)", minWidth: "130px" }}>
                   總申報租金<div className="text-[10px] font-normal" style={{ color: "var(--ink-mute)" }}>(一般 + 公益)</div>
                 </th>
                 <th className="text-left px-3 py-2 text-sm font-medium" style={{ color: "var(--ink-soft)" }}>備註</th>
@@ -3385,8 +3385,8 @@ function PropertiesPage({ data, setData, year }) {
                 // filingType 移到後面計算 (要等 actualGeneralRent / actualPublicRent 算出來)
 
                 const isExpanded = expandedId === p.id;
-                const rowBg = isExpanded ? "var(--accent-soft)"
-                  : (hasActiveThisYear ? "#fef9ec" : "white");
+                // 不再標色 (除了展開時的高亮)
+                const rowBg = isExpanded ? "var(--accent-soft)" : "white";
 
                 // === 串接「實際申報」金額 ===
                 // === 標色規則 (新版) ===
@@ -3487,14 +3487,14 @@ function PropertiesPage({ data, setData, year }) {
                     <tr className="table-row cursor-pointer"
                       style={{ background: rowBg }}
                       onClick={() => setExpandedId(isExpanded ? null : p.id)}>
-                      <td className="px-3 py-3 align-top" style={{ background: leadBg }}>
+                      <td className="px-3 py-3 align-top">
                         <span className="chevron text-sm mr-1" style={{ color: "var(--ink-mute)" }}>
                           {isExpanded ? "▾" : "▸"}
                         </span>
                         <span className="num font-medium text-base">{p.serial || "—"}</span>
                       </td>
-                      <td className="px-3 py-3 text-sm font-medium align-top" style={{ background: leadBg }}>{owner?.name || "—"}</td>
-                      <td className="px-3 py-3 align-top" style={{ background: leadBg }}>
+                      <td className="px-3 py-3 text-sm font-medium align-top">{owner?.name || "—"}</td>
+                      <td className="px-3 py-3 align-top">
                         <div className="font-medium text-sm flex items-center gap-1">
                           {p.address || p.name || "(未命名)"}
                           {p.assetType === "land" && (
@@ -5537,32 +5537,59 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       if (propOv.includeInFiling !== true) return;
                       let totalTaxable = 0;
                       let totalRent = 0;
-                      // 合約級
-                      const agg = aggregateContractsForYear(contracts || [], p.id, f.year, mro);
-                      agg.contracts.filter(c => c.months > 0).forEach(c => {
-                        const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
-                        const oKey = `c_${c.contractId}_${f.year}`;
-                        const ov = dtOv[oKey];
-                        const calcTax = (av, isPub) => {
-                          if (!params || av <= 0) return 0;
-                          const comp = { type: isPub ? "public" : (p.assetType === "land" ? "land" : "general"), monthlyRent: 0, months: 12, annualRentDirect: av, landTax: toNum(p.landTax || 0), expenseRatio: 0.43 };
-                          return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
+
+                      const calcTax = (av, isPub) => {
+                        if (!params || av <= 0) return 0;
+                        const comp = {
+                          type: isPub ? "public" : (p.assetType === "land" ? "land" : "general"),
+                          monthlyRent: 0, months: 12,
+                          annualRentDirect: av,
+                          landTax: toNum(p.landTax || 0),
+                          expenseRatio: 0.43,
                         };
-                        const tx = (ov !== undefined && ov !== null && ov !== "") ? toNum(ov) : calcTax(appliedAnnual, c.isPublic);
-                        totalRent += appliedAnnual;
-                        totalTaxable += tx;
-                      });
-                      // n_ 無合約
-                      if (agg.contracts.length === 0) {
+                        return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
+                      };
+
+                      // 合約級 — 看該年有沒有有效合約 (months > 0)
+                      const agg = aggregateContractsForYear(contracts || [], p.id, f.year, mro);
+                      const hasEffectiveContract = agg.contracts.some(c => c.months > 0);
+
+                      if (hasEffectiveContract) {
+                        agg.contracts.filter(c => c.months > 0).forEach(c => {
+                          const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                          const oKey = `c_${c.contractId}_${f.year}`;
+                          const ov = dtOv[oKey];
+                          const tx = (ov !== undefined && ov !== null && ov !== "") ? toNum(ov) : calcTax(appliedAnnual, c.isPublic);
+                          totalRent += appliedAnnual;
+                          totalTaxable += tx;
+                        });
+                      }
+
+                      // 沒有效合約路徑:檢查 totalAnnualRent (手動補列) 與 n_ override
+                      if (!hasEffectiveContract) {
+                        // 1. totalAnnualRent 手動補列 → 用算式算應稅
+                        if (propOv.totalAnnualRent !== undefined && toNum(propOv.totalAnnualRent) > 0) {
+                          const totalAnnual = toNum(propOv.totalAnnualRent);
+                          const isPub = propOv.manualType === "public";
+                          totalRent += totalAnnual;
+                          totalTaxable += calcTax(totalAnnual, isPub);
+                        }
+                        // 2. n_ override → 直接覆寫應稅 (可能跟 totalAnnualRent 一起填,或只填 n_)
                         const nKey = `n_${p.id}_${f.year}`;
                         const ov = dtOv[nKey];
                         if (ov !== undefined && ov !== null && ov !== "") {
-                          totalTaxable += toNum(ov);
-                        }
-                        if (propOv.totalAnnualRent) {
-                          totalRent += toNum(propOv.totalAnnualRent);
+                          // 若已從 totalAnnualRent 算了 → 用 n_ 覆寫應稅
+                          if (propOv.totalAnnualRent !== undefined && toNum(propOv.totalAnnualRent) > 0) {
+                            // 取代剛剛算的應稅 (但保留 totalRent)
+                            const isPub = propOv.manualType === "public";
+                            totalTaxable -= calcTax(toNum(propOv.totalAnnualRent), isPub);
+                            totalTaxable += toNum(ov);
+                          } else {
+                            totalTaxable += toNum(ov);
+                          }
                         }
                       }
+
                       out[p.id] = { name: p.address || p.name, rent: totalRent, taxable: totalTaxable };
                     });
                     return out;
