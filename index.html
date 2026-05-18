@@ -406,6 +406,16 @@ const toNum = (v) => {
 };
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+// 取得物件當年度地價稅 (向下相容:若 landTaxByYear 沒該年,退回 landTax)
+const landTaxFor = (property, year) => {
+  if (!property) return 0;
+  const byYear = property.landTaxByYear || {};
+  if (byYear[year] !== undefined && byYear[year] !== null && byYear[year] !== "") {
+    return toNum(byYear[year]);
+  }
+  return toNum(property.landTax || 0);
+};
+
 // 所得類別 (對應官方申報書「所得類別」)
 const INCOME_CATEGORIES = {
   salary:    { label: "薪資所得",       chip: "chip-amber",  defaultCode: "50",   field: "salary"   },
@@ -1133,7 +1143,7 @@ function computeTaxForFiling(filing, members, year) {
           type: isPub ? "public" : (isLand ? "land" : "general"),
           monthlyRent: 0, months: 12,
           annualRentDirect: annualValue,
-          landTax: toNum(p.landTax || 0),
+          landTax: landTaxFor(p, filing.year),
           expenseRatio: 0.43,
         };
         return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
@@ -1767,10 +1777,10 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
       monthlyRent: Math.round(toNum(override.totalAnnualRent) / 12),
       months: 12,
       annualRentDirect: toNum(override.totalAnnualRent),
-      landTax: toNum(property.landTax || 0),
+      landTax: landTaxFor(property, year),
       expenseRatio: 0.43,
       note: isLand
-        ? `土地·手動補列 ${fmt(toNum(override.totalAnnualRent))} − 地價稅 ${fmt(toNum(property.landTax || 0))}`
+        ? `土地·手動補列 ${fmt(toNum(override.totalAnnualRent))} − 地價稅 ${fmt(landTaxFor(property, year))}`
         : `${isPub ? "公益" : "一般"}·手動補列 ${fmt(toNum(override.totalAnnualRent))}`,
       _fromContract: true,
     }];
@@ -1819,10 +1829,10 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
             monthlyRent: c.monthly,
             months: c.months,
             annualRentDirect: annual,
-            landTax: toNum(property.landTax || 0),
+            landTax: landTaxFor(property, year),
             expenseRatio: 0.43,
             note: isLandAsset
-              ? `土地·${c.period}${c.isAdjusted ? " · 手動" : ""} · 地價稅 ${fmt(toNum(property.landTax || 0))}`
+              ? `土地·${c.period}${c.isAdjusted ? " · 手動" : ""} · 地價稅 ${fmt(landTaxFor(property, year))}`
               : `一般出租 · ${c.period}${c.isAdjusted ? " · 手動" : ""}`,
             _fromContract: true,
           });
@@ -1841,10 +1851,10 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
             monthlyRent: Math.round(agg.appliedGeneralRent / generalTotalMonths),
             months: generalTotalMonths,
             annualRentDirect: agg.appliedGeneralRent,
-            landTax: toNum(property.landTax || 0),
+            landTax: landTaxFor(property, year),
             expenseRatio: 0.43,
             note: isLandAsset
-              ? `土地·手動 = ${fmt(agg.manualTotal)} − 地價稅 ${fmt(toNum(property.landTax || 0))}`
+              ? `土地·手動 = ${fmt(agg.manualTotal)} − 地價稅 ${fmt(landTaxFor(property, year))}`
               : `一般部分 = 手動總額 ${fmt(agg.manualTotal)} − 公益 ${fmt(agg.appliedPublicRent)}`,
             _fromContract: true,
           });
@@ -1862,10 +1872,10 @@ function getComputablesForProperty(property, year, contracts, rentalRecords, man
             monthlyRent: c.monthly,
             months: c.months,
             annualRentDirect: c.rent,
-            landTax: toNum(property.landTax || 0),
+            landTax: landTaxFor(property, year),
             expenseRatio: 0.43,
             note: isLandAsset
-              ? `土地出租 · ${c.period} · 地價稅 ${fmt(toNum(property.landTax || 0))}`
+              ? `土地出租 · ${c.period} · 地價稅 ${fmt(landTaxFor(property, year))}`
               : `一般出租 · ${c.period} · ${Number.isInteger(c.months) ? c.months : c.months.toFixed(2)}個月`,
             _fromContract: true,
           });
@@ -3413,7 +3423,7 @@ function PropertiesPage({ data, setData, year }) {
                       type: isPub ? "public" : (p.assetType === "land" ? "land" : "general"),
                       monthlyRent: 0, months: 12,
                       annualRentDirect: annualValue,
-                      landTax: toNum(p.landTax || 0),
+                      landTax: landTaxFor(p, year),
                       expenseRatio: 0.43,
                     };
                     return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
@@ -3501,9 +3511,9 @@ function PropertiesPage({ data, setData, year }) {
                             <span className="chip text-[10px]" style={{ background: "#e8e2d5", color: "var(--ink)" }}>🌳 土地</span>
                           )}
                         </div>
-                        {p.assetType === "land" && toNum(p.landTax || 0) > 0 && (
+                        {p.assetType === "land" && landTaxFor(p, year) > 0 && (
                           <div className="text-xs num mt-0.5" style={{ color: "var(--ink-mute)" }}>
-                            地價稅 {fmt(toNum(p.landTax))}
+                            {year} 年地價稅 {fmt(landTaxFor(p, year))}
                           </div>
                         )}
                         {/* 補繳歷史 — 從所有 filings 找 adjustments 中 adjPropertyId === p.id 的 */}
@@ -3938,12 +3948,31 @@ function PropertyModal({ property, members, types, params, onSave, onClose }) {
             </div>
           </div>
 
-          {/* 土地時顯示地價稅 */}
+          {/* 土地時顯示地價稅 (按年度分別填) */}
           {p.assetType === "land" && (
-            <Field label="當年度地價稅" hint="土地租金的唯一可扣除費用 (請填當年實際繳納金額)">
-              <SumInput value={p.landTax || 0}
-                onChange={v => setP({ ...p, landTax: v })} />
-            </Field>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--ink-soft)" }}>各年度地價稅 <span className="ml-1" style={{ color: "var(--ink-mute)" }}>(土地租金的唯一可扣除費用)</span></label>
+              <div className="space-y-1.5" style={{ background: "#fafaf6", padding: "10px", borderRadius: "4px", border: "1px solid var(--line)" }}>
+                {[115, 114, 113, 112, 111, 110].map(yr => {
+                  const byYear = p.landTaxByYear || {};
+                  const cur = byYear[yr] !== undefined ? byYear[yr] : (yr === 113 ? toNum(p.landTax || 0) : 0);
+                  return (
+                    <div key={yr} className="flex items-center gap-2">
+                      <span className="text-xs num" style={{ color: "var(--ink-mute)", minWidth: "50px" }}>{yr} 年</span>
+                      <SumInput value={cur}
+                        onChange={v => {
+                          const newByYear = { ...(p.landTaxByYear || {}), [yr]: toNum(v) };
+                          // 同時更新舊版 landTax (向下相容,用當年參考)
+                          setP({ ...p, landTaxByYear: newByYear, landTax: newByYear[113] || newByYear[114] || newByYear[115] || 0 });
+                        }} />
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-[10px] mt-1" style={{ color: "var(--ink-mute)" }}>
+                ⓘ 請填當年實際繳納金額 (向下相容:若舊資料只有單一地價稅,自動套用到 113 年)
+              </div>
+            </div>
           )}
 
           <div className="p-3 rounded text-xs" style={{ background: "#fafaf6", border: "1px solid var(--line)" }}>
@@ -5560,7 +5589,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                           type: isPub ? "public" : (p.assetType === "land" ? "land" : "general"),
                           monthlyRent: 0, months: 12,
                           annualRentDirect: av,
-                          landTax: toNum(p.landTax || 0),
+                          landTax: landTaxFor(p, year),
                           expenseRatio: 0.43,
                         };
                         return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
@@ -5986,7 +6015,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       type: isPub ? "public" : (isLand ? "land" : "general"),
                       monthlyRent: 0, months: 12,
                       annualRentDirect: annualValue,
-                      landTax: toNum(p.landTax || 0),
+                      landTax: landTaxFor(p, year),
                       expenseRatio: 0.43,
                     };
                     return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
@@ -6085,7 +6114,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                           type: isPub ? "public" : (isLand ? "land" : "general"),
                           monthlyRent: 0, months: 12,
                           annualRentDirect: annualValue,
-                          landTax: toNum(p.landTax || 0),
+                          landTax: landTaxFor(p, year),
                           expenseRatio: 0.43,
                         };
                         return computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
@@ -6444,7 +6473,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     type: isPub ? "public" : (p.assetType === "land" ? "land" : "general"),
                     monthlyRent: 0, months: 12,
                     annualRentDirect: av,
-                    landTax: toNum(p.landTax || 0),
+                    landTax: landTaxFor(p, year),
                     expenseRatio: 0.43,
                   };
                   return computeRentalIncome([comp], pyParams).breakdown[0]?.taxableIncome || 0;
@@ -6506,7 +6535,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       </div>
                       <div className="text-xs mt-0.5" style={{ color: "var(--ink-mute)" }}>
                         {owner?.name}{p.name && p.name !== p.address ? ` · ${p.name}` : ""}
-                        {p.assetType === "land" && toNum(p.landTax || 0) > 0 && ` · 地價稅 ${fmt(toNum(p.landTax))}`}
+                        {p.assetType === "land" && landTaxFor(p, year) > 0 && ` · ${year}年地價稅 ${fmt(landTaxFor(p, year))}`}
                         {!hasContracts && " · 本年度無合約"}
                       </div>
                     </div>
@@ -6635,13 +6664,17 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                               </div>
                               {p.assetType === "land" && (
                                 <div className="flex items-center gap-2">
-                                  <span style={{ minWidth: "85px" }}>當年地價稅:</span>
+                                  <span style={{ minWidth: "85px" }}>{year}年地價稅:</span>
                                   <div className="w-40">
-                                    <SumInput value={p.landTax || 0}
+                                    <SumInput value={landTaxFor(p, year)}
                                       onChange={v => {
-                                        // 直接更新該 property 的 landTax (需要 setProperties)
+                                        // 更新該 property 的 landTaxByYear[year]
                                         if (setProperties) {
-                                          setProperties(properties.map(pp => pp.id === p.id ? { ...pp, landTax: v } : pp));
+                                          setProperties(properties.map(pp => {
+                                            if (pp.id !== p.id) return pp;
+                                            const newByYear = { ...(pp.landTaxByYear || {}), [year]: toNum(v) };
+                                            return { ...pp, landTaxByYear: newByYear, landTax: newByYear[year] || pp.landTax };
+                                          }));
                                         }
                                       }} />
                                   </div>
@@ -6698,7 +6731,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                                 monthlyRent: c.monthly,
                                 months: c.months,
                                 annualRentDirect: c.rent,
-                                landTax: toNum(p.landTax || 0),
+                                landTax: landTaxFor(p, year),
                                 expenseRatio: 0.43,
                               };
                               const origTax = computeRentalIncome([origComputable], params).breakdown[0]?.taxableIncome || 0;
@@ -6794,7 +6827,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                                     const oc = {
                                       type: c.isPublic ? "public" : (p.assetType === "land" ? "land" : "general"),
                                       monthlyRent: c.monthly, months: c.months,
-                                      annualRentDirect: c.rent, landTax: toNum(p.landTax || 0), expenseRatio: 0.43,
+                                      annualRentDirect: c.rent, landTax: landTaxFor(p, year), expenseRatio: 0.43,
                                     };
                                     return s + (computeRentalIncome([oc], params).breakdown[0]?.taxableIncome || 0);
                                   }, 0);
@@ -8219,7 +8252,7 @@ function SettlementPanel({ filing, onChange, rawOnChange, systemFinalDue, proper
                                     type: isPub ? "public" : (isLand ? "land" : "general"),
                                     monthlyRent: 0, months: 12,
                                     annualRentDirect: annualVal,
-                                    landTax: toNum(prop.landTax || 0),
+                                    landTax: landTaxFor(prop, filing.year),
                                     expenseRatio: 0.43,
                                   };
                                   taxablePreview = computeRentalIncome([comp], paramsLocal).breakdown[0]?.taxableIncome || 0;
