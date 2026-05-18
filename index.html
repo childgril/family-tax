@@ -5042,6 +5042,19 @@ function FilingPage({ data, setData, year, setPage }) {
       ? `${sourceFiling.name} (補繳)`
       : `${sourceFiling.name} (補繳 ${supplementIndex})`;
 
+    // 計算原版實際採用的計稅方法 key (用於鎖定補繳版的方法,避免 auto 重新選不同方法)
+    let lockedTaxMethod = sourceFiling.taxMethod || "auto";
+    if (lockedTaxMethod === "auto") {
+      try {
+        const r = computeFilingWithData(sourceFiling, data, sourceFiling.year);
+        if (r && r.chosenMethod && r.chosenMethod.key) {
+          lockedTaxMethod = r.chosenMethod.key;
+        }
+      } catch (e) {
+        console.warn("無法推導原版計稅方法,維持 auto", e);
+      }
+    }
+
     const newFiling = {
       ...JSON.parse(JSON.stringify(sourceFiling)),  // deep clone
       id: uid(),
@@ -5049,6 +5062,8 @@ function FilingPage({ data, setData, year, setPage }) {
       supplementOfId: sourceFiling.id,
       supplementCreatedAt: new Date().toISOString(),
       supplementIndex,
+      // 鎖定計稅方法 — 避免補繳版 auto 重新挑了不同方法,讓比較失真
+      taxMethod: lockedTaxMethod,
       // 補繳版預設不鎖,讓使用者可改
       locked: false,
       settlementLocked: false,
@@ -5061,7 +5076,8 @@ function FilingPage({ data, setData, year, setPage }) {
     setData({ ...data, filings: [...data.filings, newFiling] });
     setSelectedId(newFiling.id);
     setTimeout(() => {
-      alert(`✓ 已建立補繳版「${newName}」\n\n你可以直接修改任何欄位,系統會自動跟原版比對。`);
+      const methodHint = lockedTaxMethod === "auto" ? "自動選最低稅" : `跟原版同方法 (${lockedTaxMethod})`;
+      alert(`✓ 已建立補繳版「${newName}」\n\n計稅方法已鎖定為「${methodHint}」,確保跟原版比較公平。\n如需重新選方法,可到 ⑥ 區手動切換。`);
     }, 100);
   };
 
@@ -6366,6 +6382,17 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               const isIncluded = override?.includeInFiling === true;  // 預設 false,需主動勾選
               const hasContracts = agg.anyContractInYear;
 
+              // 算「申報租金」(本年):合約 appliedRent 加總 或 totalAnnualRent
+              let declaredRentTotal = 0;
+              const validContracts = agg.contracts.filter(c => c.months > 0);
+              if (validContracts.length > 0) {
+                validContracts.forEach(c => {
+                  declaredRentTotal += c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                });
+              } else if (override?.totalAnnualRent) {
+                declaredRentTotal = toNum(override.totalAnnualRent);
+              }
+
               // 「採用中」: 有合約計入 OR 沒合約但 taxableTotal > 0 (手動覆寫的)
               const hasManualWithoutContract = !hasContracts && taxableTotal > 0;
               const isActive = (hasContracts && isIncluded) || hasManualWithoutContract;
@@ -6419,9 +6446,25 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                   }
                 }
                 if (pyAgg.anyContractInYear || pyTaxableUsed > 0) {
-                  priorYearsData.push({ year: py, taxable: pyTaxableUsed });
+                  // 也算「實際申報租金」(申報年度的合約租金加總)
+                  let pyDeclaredRent = 0;
+                  const pyContracts2 = pyAgg.contracts.filter(c => c.months > 0);
+                  pyContracts2.forEach(c => {
+                    pyDeclaredRent += c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                  });
+                  // 沒合約但有手動補列
+                  if (pyContracts2.length === 0 && pyFiling) {
+                    const pyMro = pyFiling.manualRentOverrides || {};
+                    const pyKey = `${p.id}_${py}`;
+                    if (pyMro[pyKey]?.totalAnnualRent) {
+                      pyDeclaredRent = toNum(pyMro[pyKey].totalAnnualRent);
+                    }
+                  }
+                  priorYearsData.push({ year: py, taxable: pyTaxableUsed, rent: pyDeclaredRent });
                 }
               }
+              // 排序:舊到新 (110, 111, 112, ...)
+              priorYearsData.sort((a, b) => a.year - b.year);
 
               return (
                 <details key={`${p.id}_${rentalExpandKey}`} className="rounded" open={isOpen} style={{ background: isActive ? "white" : "#fafaf6", border: "1px solid var(--line)" }}>
@@ -6457,21 +6500,27 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     </div>
                     {/* 前幾年同物件參考 (帶出歷年申報應稅) */}
                     {priorYearsData.length > 0 && (
-                      <div className="flex items-center gap-3 pr-3" style={{ borderRight: "1px solid var(--line-soft)" }}>
+                      <div className="flex items-center gap-4 pr-3" style={{ borderRight: "1px solid var(--line-soft)" }}>
                         {priorYearsData.map(pd => (
                           <div key={pd.year} className="text-right">
-                            <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{pd.year} 年應稅</div>
-                            <div className="font-serif num text-sm" style={{ color: "var(--ink-soft)" }}>
-                              {fmt(pd.taxable)}
+                            <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{pd.year} 年</div>
+                            <div className="font-serif num text-xs" style={{ color: "var(--ink-soft)" }}>
+                              申報 {fmt(pd.rent || 0)}
+                            </div>
+                            <div className="font-serif num text-[11px]" style={{ color: "var(--ink-mute)" }}>
+                              應稅 {fmt(pd.taxable)}
                             </div>
                           </div>
                         ))}
                       </div>
                     )}
                     <div className="text-right">
-                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{year} 年應稅</div>
-                      <div className="font-serif num text-base">
-                        {isIncluded ? fmt(taxableTotal) : <span style={{ color: "var(--ink-mute)" }}>不計入</span>}
+                      <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{year} 年</div>
+                      <div className="font-serif num text-sm" style={{ color: isIncluded ? "var(--accent-deep)" : "var(--ink-mute)" }}>
+                        {isIncluded ? `申報 ${fmt(declaredRentTotal || 0)}` : "—"}
+                      </div>
+                      <div className="font-serif num text-xs" style={{ color: "var(--ink-mute)" }}>
+                        {isIncluded ? `應稅 ${fmt(taxableTotal)}` : "不計入"}
                       </div>
                       {(() => {
                         // 用 priorYearsData 拿前一年 (year-1) 比較
