@@ -6049,11 +6049,11 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                 }
                 return (
                   <>
-                    <div className="text-xs mb-0.5" style={{ color: "var(--ink-mute)" }}>
-                      申報租金:{list.map(p => <span key={p.name + "r"} className="num ml-1">{p.name} <b style={{ color: "var(--ink)" }}>{fmt(p.declaredRent)}</b></span>).reduce((acc, el, i) => i === 0 ? [el] : [...acc, " · ", el], [])}
+                    <div className="text-sm mb-0.5" style={{ color: "var(--ink-mute)" }}>
+                      申報租金:{list.map(p => <span key={p.name + "r"} className="num ml-1">{p.name} <b style={{ color: "var(--ink)", fontSize: "14px" }}>{fmt(p.declaredRent)}</b></span>).reduce((acc, el, i) => i === 0 ? [el] : [...acc, " · ", el], [])}
                     </div>
-                    <div className="text-xs font-medium" style={{ color: "var(--accent-deep)" }}>
-                      申報應稅:{list.map(p => <span key={p.name + "t"} className="num ml-1">{p.name} <b style={{ fontSize: "14px" }}>{fmt(p.declaredTaxable)}</b></span>).reduce((acc, el, i) => i === 0 ? [el] : [...acc, " · ", el], [])}
+                    <div className="text-sm font-medium" style={{ color: "var(--accent-deep)" }}>
+                      申報應稅:{list.map(p => <span key={p.name + "t"} className="num ml-1">{p.name} <b style={{ fontSize: "16px" }}>{fmt(p.declaredTaxable)}</b></span>).reduce((acc, el, i) => i === 0 ? [el] : [...acc, " · ", el], [])}
                     </div>
                   </>
                 );
@@ -6082,17 +6082,17 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               )}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-xs" style={{ minWidth: "820px" }}>
+              <table className="w-full text-sm" style={{ minWidth: "820px" }}>
                 <thead>
                   <tr style={{ background: "white", borderBottom: "2px solid var(--ink-soft)" }}>
                     <th className="text-center px-2 py-1.5 font-medium w-12" style={{ color: "var(--ink-mute)" }}>核對</th>
                     <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>歸戶</th>
                     <th className="text-left px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>地址</th>
                     <th className="text-center px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)" }}>類型</th>
-                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>實際租金<br/><span className="text-[9px]">(合約原值)</span></th>
-                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>申報租金<br/><span className="text-[9px]">(實際採用)</span></th>
-                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px" }}>實際應稅<br/><span className="text-[9px]">/地價稅</span></th>
-                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "90px", background: "#f5fbef" }}>申報應稅<br/><span className="text-[9px]">(計入綜所)</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>實際租金<br/><span className="text-[10px]">(合約原值)</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>申報租金<br/><span className="text-[10px]">(實際採用)</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px" }}>實際應稅<br/><span className="text-[10px]">/地價稅</span></th>
+                    <th className="text-right px-2 py-1.5 font-medium" style={{ color: "var(--ink-mute)", minWidth: "100px", background: "#f5fbef" }}>申報應稅<br/><span className="text-[10px]">(計入綜所)</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -6549,15 +6549,15 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                       <div className="flex items-center gap-4 pr-3" style={{ borderRight: "1px solid var(--line-soft)" }}>
                         {priorYearsData.map(pd => (
                           <div key={pd.year} className="text-right">
-                            <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{pd.year} 年</div>
+                            <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{pd.year} 年</div>
                             {pd.notFiled ? (
-                              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>未申報</div>
+                              <div className="text-sm" style={{ color: "var(--ink-mute)" }}>未申報</div>
                             ) : (
                               <>
-                                <div className="font-serif num text-xs" style={{ color: "var(--ink-soft)" }}>
+                                <div className="font-serif num text-sm" style={{ color: "var(--ink-soft)" }}>
                                   申報 {fmt(pd.rent || 0)}
                                 </div>
-                                <div className="font-serif num text-[11px]" style={{ color: "var(--ink-mute)" }}>
+                                <div className="font-serif num text-xs" style={{ color: "var(--ink-mute)" }}>
                                   應稅 {fmt(pd.taxable)}
                                 </div>
                               </>
@@ -6568,10 +6568,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     )}
                     <div className="text-right">
                       <div className="text-xs" style={{ color: "var(--ink-mute)" }}>{year} 年</div>
-                      <div className="font-serif num text-sm" style={{ color: isIncluded ? "var(--accent-deep)" : "var(--ink-mute)" }}>
+                      <div className="font-serif num text-base" style={{ color: isIncluded ? "var(--accent-deep)" : "var(--ink-mute)", fontSize: "15px" }}>
                         {isIncluded ? `申報 ${fmt(declaredRentTotal || 0)}` : "—"}
                       </div>
-                      <div className="font-serif num text-xs" style={{ color: "var(--ink-mute)" }}>
+                      <div className="font-serif num text-sm" style={{ color: "var(--ink-mute)" }}>
                         {isIncluded ? `應稅 ${fmt(taxableTotal)}` : "不計入"}
                       </div>
                       {(() => {
@@ -6580,7 +6580,7 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                         if (!lastYearData || !isIncluded) return null;
                         const lastYearTaxable = lastYearData.taxable;
                         return (
-                          <div className="text-[10px]" style={{
+                          <div className="text-xs" style={{
                             color: taxableTotal > lastYearTaxable ? "var(--accent-deep)" :
                                    taxableTotal < lastYearTaxable ? "var(--green)" : "var(--ink-mute)"
                           }}>
@@ -6709,19 +6709,19 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                           合約攤分明細 ({agg.contracts.length} 份) · <span style={{ color: "var(--ink-mute)" }}>手動調整欄留空 = 用原合約算</span>
                         </div>
                         <div className="overflow-x-auto">
-                        <table className="w-full text-xs" style={{ minWidth: "950px" }}>
+                        <table className="w-full text-sm" style={{ minWidth: "950px" }}>
                           <thead>
                             <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--line)" }}>
-                              <th className="text-center px-2 py-1 font-medium" style={{ width: "40px" }}>計入</th>
-                              <th className="text-left px-2 py-1 font-medium">租客</th>
-                              <th className="text-left px-2 py-1 font-medium">租期</th>
-                              <th className="text-center px-2 py-1 font-medium">月數</th>
-                              <th className="text-right px-2 py-1 font-medium">月租</th>
-                              <th className="text-right px-2 py-1 font-medium">當年度租金</th>
-                              <th className="text-right px-2 py-1 font-medium" style={{ minWidth: "110px", background: "#fef9ec" }}>手動調整租金</th>
-                              <th className="text-right px-2 py-1 font-medium" style={{ minWidth: "100px" }}>原應稅</th>
-                              <th className="text-right px-2 py-1 font-medium" style={{ minWidth: "100px", background: "#f5fbef" }}>調整後應稅</th>
-                              <th className="text-center px-2 py-1 font-medium">類型</th>
+                              <th className="text-center px-2 py-1.5 font-medium" style={{ width: "40px" }}>計入</th>
+                              <th className="text-left px-2 py-1.5 font-medium">租客</th>
+                              <th className="text-left px-2 py-1.5 font-medium">租期</th>
+                              <th className="text-center px-2 py-1.5 font-medium">月數</th>
+                              <th className="text-right px-2 py-1.5 font-medium">月租</th>
+                              <th className="text-right px-2 py-1.5 font-medium">當年度租金</th>
+                              <th className="text-right px-2 py-1.5 font-medium" style={{ minWidth: "120px", background: "#fef9ec" }}>手動調整租金</th>
+                              <th className="text-right px-2 py-1.5 font-medium" style={{ minWidth: "110px" }}>原應稅</th>
+                              <th className="text-right px-2 py-1.5 font-medium" style={{ minWidth: "110px", background: "#f5fbef" }}>調整後應稅</th>
+                              <th className="text-center px-2 py-1.5 font-medium">類型</th>
                             </tr>
                           </thead>
                           <tbody>
