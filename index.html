@@ -6401,69 +6401,85 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
               const defaultOpen = isActive;
               const isOpen = rentalForceState === null ? defaultOpen : rentalForceState;
 
-              // 算前幾年同物件的應稅租金 (作參考) — 直接用合約自動算,不參考去年的手動覆寫
-              // 同時參考使用者已輸入的「申報應稅手動覆寫」(declaredTaxableOverrides) 看其他年度有沒有覆寫過
+              // === 算前幾年同物件「實際申報」的租金與應稅 ===
+              // 規則:
+              //   - 找該年度同屋主的 filing
+              //   - 若該物件「沒勾選計入該 filing」→ 顯示 0 (沒申報)
+              //   - 若勾選了 → 帶入該年度的 manualRentOverrides (含手動調整租金) + declaredTaxableOverrides (含應稅覆寫)
+              //   - 用跟「物件清單」一致的計算邏輯
               const priorYearsData = [];
               for (let offset = 1; offset <= 3; offset++) {
                 const py = year - offset;
-                if (py < 110) break;  // 不查 110 之前 (參數可能未定義)
-                const pyComputables = getComputablesForProperty(p, py, contracts, rentalRecords, {});
-                const pyTaxableAuto = computeRentalIncome(pyComputables, params).taxable;
-                const pyAgg = aggregateContractsForYear(contracts, p.id, py, {});
-                // 也找該年度的「申報應稅 override」(若該年度的 filing 有填手動覆寫,優先顯示)
-                let pyTaxableUsed = pyTaxableAuto;
+                if (py < 110) break;
                 const pyFiling = (allFilings || []).find(f => f.year === py && (
                   f.taxpayerId === p.ownerId || f.spouseId === p.ownerId || (f.dependentIds || []).includes(p.ownerId)
                 ));
-                if (pyFiling) {
-                  const dtOv = pyFiling.declaredTaxableOverrides || {};
-                  // 把該物件相關的 override 加總
-                  let sumOv = 0, hasAnyOv = false;
-                  const pyContracts = pyAgg.contracts.filter(c => c.months > 0);
-                  pyContracts.forEach(c => {
-                    const k = `c_${c.contractId}_${py}`;
-                    if (dtOv[k] !== undefined && dtOv[k] !== null && dtOv[k] !== "") {
-                      sumOv += toNum(dtOv[k]);
-                      hasAnyOv = true;
-                    } else {
-                      // 沒覆寫則用 auto
-                      const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
-                      const comp = {
-                        type: c.isPublic ? "public" : (p.assetType === "land" ? "land" : "general"),
-                        monthlyRent: 0, months: 12,
-                        annualRentDirect: appliedAnnual,
-                        landTax: toNum(p.landTax || 0),
-                        expenseRatio: 0.43,
-                      };
-                      sumOv += computeRentalIncome([comp], params).breakdown[0]?.taxableIncome || 0;
-                    }
+                // 若該年度沒有對應 filing → 該物件沒申報該年
+                if (!pyFiling) continue;
+
+                const pyParams = TAX_PARAMS[py];
+                if (!pyParams) continue;
+
+                const pyMro = pyFiling.manualRentOverrides || {};
+                const pyDtOv = pyFiling.declaredTaxableOverrides || {};
+                const pyKey = `${p.id}_${py}`;
+                const pyPropOv = pyMro[pyKey] || {};
+                const pyIncluded = pyPropOv.includeInFiling === true;
+
+                // 沒勾選計入 → 該年沒申報這物件
+                if (!pyIncluded) {
+                  // 仍顯示一個「申報 0、應稅 0」的記錄,讓使用者知道該年沒申報
+                  priorYearsData.push({ year: py, taxable: 0, rent: 0, notFiled: true });
+                  continue;
+                }
+
+                // 計算該年度的申報租金 + 應稅 (跟物件清單同邏輯)
+                const pyAgg = aggregateContractsForYear(contracts, p.id, py, pyMro);
+                let pyDeclaredRent = 0;
+                let pyTaxable = 0;
+
+                const calcPyTax = (av, isPub) => {
+                  if (!pyParams || av <= 0) return 0;
+                  const comp = {
+                    type: isPub ? "public" : (p.assetType === "land" ? "land" : "general"),
+                    monthlyRent: 0, months: 12,
+                    annualRentDirect: av,
+                    landTax: toNum(p.landTax || 0),
+                    expenseRatio: 0.43,
+                  };
+                  return computeRentalIncome([comp], pyParams).breakdown[0]?.taxableIncome || 0;
+                };
+
+                const pyValidContracts = pyAgg.contracts.filter(c => c.months > 0);
+                if (pyValidContracts.length > 0) {
+                  // 有合約:用每份合約的 appliedRent + 申報應稅覆寫
+                  pyValidContracts.forEach(c => {
+                    const appliedAnnual = c.appliedRent !== undefined ? c.appliedRent : c.rent;
+                    pyDeclaredRent += appliedAnnual;
+                    const cKey = `c_${c.contractId}_${py}`;
+                    const ov = pyDtOv[cKey];
+                    pyTaxable += (ov !== undefined && ov !== null && ov !== "")
+                      ? toNum(ov)
+                      : calcPyTax(appliedAnnual, c.isPublic);
                   });
-                  if (hasAnyOv || pyContracts.length > 0) pyTaxableUsed = sumOv;
-                  // 也檢查 n_ (沒合約物件) override
+                } else {
+                  // 沒有效合約:看 totalAnnualRent (手動補列) 或 n_ override
+                  if (pyPropOv.totalAnnualRent !== undefined && toNum(pyPropOv.totalAnnualRent) > 0) {
+                    const annual = toNum(pyPropOv.totalAnnualRent);
+                    const isPub = pyPropOv.manualType === "public";
+                    pyDeclaredRent = annual;
+                    pyTaxable = calcPyTax(annual, isPub);
+                  }
                   const nKey = `n_${p.id}_${py}`;
-                  if (dtOv[nKey] !== undefined && dtOv[nKey] !== null && dtOv[nKey] !== "") {
-                    pyTaxableUsed = toNum(dtOv[nKey]);
+                  if (pyDtOv[nKey] !== undefined && pyDtOv[nKey] !== null && pyDtOv[nKey] !== "") {
+                    // n_ override 取代應稅
+                    pyTaxable = toNum(pyDtOv[nKey]);
                   }
                 }
-                if (pyAgg.anyContractInYear || pyTaxableUsed > 0) {
-                  // 也算「實際申報租金」(申報年度的合約租金加總)
-                  let pyDeclaredRent = 0;
-                  const pyContracts2 = pyAgg.contracts.filter(c => c.months > 0);
-                  pyContracts2.forEach(c => {
-                    pyDeclaredRent += c.appliedRent !== undefined ? c.appliedRent : c.rent;
-                  });
-                  // 沒合約但有手動補列
-                  if (pyContracts2.length === 0 && pyFiling) {
-                    const pyMro = pyFiling.manualRentOverrides || {};
-                    const pyKey = `${p.id}_${py}`;
-                    if (pyMro[pyKey]?.totalAnnualRent) {
-                      pyDeclaredRent = toNum(pyMro[pyKey].totalAnnualRent);
-                    }
-                  }
-                  priorYearsData.push({ year: py, taxable: pyTaxableUsed, rent: pyDeclaredRent });
-                }
+
+                priorYearsData.push({ year: py, taxable: pyTaxable, rent: pyDeclaredRent });
               }
-              // 排序:舊到新 (110, 111, 112, ...)
+              // 排序:舊到新
               priorYearsData.sort((a, b) => a.year - b.year);
 
               return (
@@ -6504,12 +6520,18 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                         {priorYearsData.map(pd => (
                           <div key={pd.year} className="text-right">
                             <div className="text-[10px]" style={{ color: "var(--ink-mute)" }}>{pd.year} 年</div>
-                            <div className="font-serif num text-xs" style={{ color: "var(--ink-soft)" }}>
-                              申報 {fmt(pd.rent || 0)}
-                            </div>
-                            <div className="font-serif num text-[11px]" style={{ color: "var(--ink-mute)" }}>
-                              應稅 {fmt(pd.taxable)}
-                            </div>
+                            {pd.notFiled ? (
+                              <div className="text-xs" style={{ color: "var(--ink-mute)" }}>未申報</div>
+                            ) : (
+                              <>
+                                <div className="font-serif num text-xs" style={{ color: "var(--ink-soft)" }}>
+                                  申報 {fmt(pd.rent || 0)}
+                                </div>
+                                <div className="font-serif num text-[11px]" style={{ color: "var(--ink-mute)" }}>
+                                  應稅 {fmt(pd.taxable)}
+                                </div>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
