@@ -2941,7 +2941,8 @@ function FormulaInput({ exprValue, value, onChange, placeholder = "可填算式 
       <input
         type="text"
         inputMode="decimal"
-        className="input-text w-full text-right text-xs"
+        className="input-text w-full text-right num"
+        style={{ fontSize: "14px" }}
         value={display}
         placeholder={placeholder}
         title="可以輸入算式,例如 180000+36000,系統會自動加總並保留算式"
@@ -8669,8 +8670,9 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
         )}
       </td>
       <td className="px-2 py-1">
-        <input className="input-text-plain text-xs w-full" value={e.source || ""}
+        <input className="input-text-plain text-[11px] w-full" value={e.source || ""}
           list={`payerNames_${e.id}`}
+          style={{ opacity: 0.7 }}
           onChange={ev => {
             const name = ev.target.value;
             // 反查統編
@@ -8685,7 +8687,7 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
               onSavePayer(e.taxId, ev.target.value);
             }
           }}
-          placeholder="例:鴻海精密" />
+          placeholder="扣繳單位" />
         <datalist id={`payerNames_${e.id}`}>
           {payerDirectory && Object.entries(payerDirectory).map(([taxId, name]) => (
             <option key={taxId} value={name}>{taxId}</option>
@@ -8693,8 +8695,9 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
         </datalist>
       </td>
       <td className="px-2 py-1">
-        <input className="input-text-plain text-xs w-full num" value={e.taxId || ""}
+        <input className="input-text-plain text-[11px] w-full num" value={e.taxId || ""}
           list={`payerTaxIds_${e.id}`}
+          style={{ opacity: 0.7 }}
           onChange={ev => {
             const taxId = ev.target.value.replace(/[^\d]/g, "");
             const patch = { taxId };
@@ -8753,11 +8756,11 @@ function renderEntryRow(e, CATEGORIES, CODES, members, onUpdate, onRemove, group
           );
         })()}
       </td>
-      <td className="px-2 py-1 text-right num font-medium" style={{ background: "#fdfcf7" }}>
+      <td className="px-2 py-1 text-right num font-medium" style={{ background: "#fdfcf7", fontSize: "14px" }}>
         {fmt(net)}
       </td>
       <td className="px-2 py-1">
-        <SumInput value={e.withholding} onChange={v => onUpdate(e.id, { withholding: v })} />
+        <SumInput value={e.withholding} onChange={v => onUpdate(e.id, { withholding: v })} className="text-sm" />
       </td>
       <td className="px-2 py-1 text-center">
         <button className="text-red-600 text-xs hover:underline" onClick={() => onRemove(e.id)}>×</button>
@@ -8960,20 +8963,20 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove, payer
                     <tr style={{ background: "#fafaf6", borderBottom: "1px solid var(--ink)" }}>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "110px" }}>所得類別</th>
                       <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>格式代號</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "210px" }}>扣繳單位</th>
-                      <th className="px-2 py-2 text-left font-medium" style={{ width: "110px" }}>統一編號</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "120px", color: "var(--ink-mute)" }}>扣繳單位</th>
+                      <th className="px-2 py-2 text-left font-medium" style={{ width: "70px", color: "var(--ink-mute)" }}>統一編號</th>
                       {!groupByMember && (
                         <th className="px-2 py-2 text-left font-medium" style={{ width: "90px" }}>歸戶</th>
                       )}
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "220px" }}>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "260px", fontSize: "13px" }}>
                         給付/收入
-                        <div className="text-[9px] font-normal" style={{ color: "var(--ink-mute)" }}>
+                        <div className="text-[10px] font-normal" style={{ color: "var(--ink-mute)" }}>
                           可填算式 (如 180000+36000)
                         </div>
                       </th>
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "110px" }}>必要費用</th>
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "110px" }}>所得總額</th>
-                      <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>扣繳稅額</th>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "100px" }}>必要費用</th>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "130px", fontSize: "13px" }}>所得總額</th>
+                      <th className="px-2 py-2 text-right font-medium" style={{ width: "120px", fontSize: "13px" }}>扣繳稅額</th>
                       <th className="px-2 py-2 text-center font-medium" style={{ width: "40px" }}></th>
                     </tr>
                   </thead>
@@ -9016,14 +9019,14 @@ function IncomeEntriesTable({ entries, members, onAdd, onUpdate, onRemove, payer
                       <td className="px-2 py-2 font-medium" colSpan={5}>
                         {filter === "all" ? "全部合計" : `${INCOME_CATEGORIES[filter]?.label} 小計`}
                       </td>
-                      <td className="px-2 py-2 text-right num font-medium">
+                      <td className="px-2 py-2 text-right num font-medium" style={{ fontSize: "14px" }}>
                         {fmt(visibleEntries.reduce((s, e) => s + toNum(e.gross), 0))}
                       </td>
                       <td className="px-2 py-2 text-right num" style={{ color: "var(--ink-mute)" }}>—</td>
-                      <td className="px-2 py-2 text-right num font-medium" style={{ background: "#fdfcf7" }}>
+                      <td className="px-2 py-2 text-right num font-medium" style={{ background: "#fdfcf7", fontSize: "15px" }}>
                         {fmt(visibleEntries.reduce((s, e) => s + computeEntryNet(e), 0))}
                       </td>
-                      <td className="px-2 py-2 text-right num font-medium" style={{ color: "var(--green)" }}>
+                      <td className="px-2 py-2 text-right num font-medium" style={{ color: "var(--green)", fontSize: "14px" }}>
                         {fmt(visibleEntries.reduce((s, e) => s + toNum(e.withholding), 0))}
                       </td>
                       <td></td>
