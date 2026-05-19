@@ -6992,8 +6992,10 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     note: () => {
                       const cap = Math.round((result.grossIncomeForDonation || result.grossIncome) * 0.2);
                       const actual = toNum(filing.itemizedDeductions.donationGeneral);
-                      if (actual > cap) return <span style={{ color: "var(--gold)" }}>已套 20% 上限 {fmt(cap)}</span>;
-                      return `上限 ${fmt(cap)}`;
+                      const remaining = cap - actual;
+                      if (actual > cap) return <span style={{ color: "var(--gold)" }}>已超過 20% 上限 {fmt(cap)} (多 {fmt(actual - cap)})</span>;
+                      if (actual === 0) return <span>上限 {fmt(cap)} · 還可扣 <b>{fmt(remaining)}</b></span>;
+                      return <span>上限 {fmt(cap)} − 已用 {fmt(actual)} = 還可扣 <b style={{ color: "var(--accent-deep)" }}>{fmt(remaining)}</b></span>;
                     },
                   },
                   {
@@ -7011,7 +7013,12 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     note: () => {
                       const hasPerMember = Object.keys(filing.itemizedDeductions.insurancePersonalByMember || {}).filter(k => toNum(filing.itemizedDeductions.insurancePersonalByMember[k]) > 0).length > 0;
                       if (hasPerMember) return <span style={{ color: "var(--green)" }}>✓ 逐人輸入</span>;
-                      return `每人 ≤ 24k;申報戶上限 ${fmt(params.insuranceLimit * result.filers.length)}`;
+                      const cap = params.insuranceLimit * result.filers.length;
+                      const actual = toNum(filing.itemizedDeductions.insurancePersonal);
+                      const remaining = cap - actual;
+                      if (actual >= cap) return <span style={{ color: "var(--gold)" }}>已達上限 {fmt(cap)} (每人 ≤ 24k)</span>;
+                      if (actual === 0) return <span>每人 ≤ 24k · 申報戶上限 {fmt(cap)} · 還可扣 <b>{fmt(remaining)}</b></span>;
+                      return <span>上限 {fmt(cap)} − 已用 {fmt(actual)} = 還可扣 <b style={{ color: "var(--accent-deep)" }}>{fmt(remaining)}</b></span>;
                     },
                   },
                   {
@@ -7046,9 +7053,12 @@ function FilingDetail({ filing, members, properties, setProperties, rentalRecord
                     actualField: "mortgageInterest",
                     note: () => {
                       const input = toNum(filing.itemizedDeductions.mortgageInterest);
-                      if (input === 0) return `一屋,實際 − 儲蓄扣除,上限 ${fmt(params.mortgageLimit)}`;
-                      if (input - result.savings > params.mortgageLimit) return <span style={{ color: "var(--gold)" }}>已套 30 萬上限</span>;
-                      return `實際 ${fmt(input)} − 儲蓄 ${fmt(result.savings)}`;
+                      const cap = params.mortgageLimit;
+                      const effective = Math.max(0, input - result.savings);
+                      const remaining = cap - effective;
+                      if (input === 0) return <span>一屋,實際 − 儲蓄扣除,上限 {fmt(cap)} · 還可扣 <b>{fmt(cap)}</b></span>;
+                      if (effective > cap) return <span style={{ color: "var(--gold)" }}>已達 30 萬上限 (實際 {fmt(input)} − 儲蓄 {fmt(result.savings)} = {fmt(effective)}, 超過 {fmt(effective - cap)})</span>;
+                      return <span>實際 {fmt(input)} − 儲蓄 {fmt(result.savings)} = {fmt(effective)} · 上限 {fmt(cap)} · 還可扣 <b style={{ color: "var(--accent-deep)" }}>{fmt(remaining)}</b></span>;
                     },
                   },
                 ];
